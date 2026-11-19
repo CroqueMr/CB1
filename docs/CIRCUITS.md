@@ -7,11 +7,11 @@ Engine: **CB1 0.3**. Each end-to-end rendering circuit has its own version.
 | Dolby Vision to Standard Dolby Vision | `CB1-DVDVR.0.5` |
 | Dolby Vision Master Reference | `CB1-DVDVMR.0.5` |
 | Dolby Vision to HDR10, Reference Basic | `CB1-DVHDR10B.0.4` |
-| Dolby Vision to HDR10, Reference Expert | `CB1-DVHDR10X.0.9` |
+| Dolby Vision to HDR10, Reference Expert | `CB1-DVHDR10X.0.10` |
 | Dolby Vision to Dolby Vision Adaptive HDR Mapping (A) | `CB1-DVDVA.0.9` |
 | Dolby Vision to Dolby Vision Adaptive HDR Mapping (B) | `CB1-DVDVA.0.11` |
-| HDR10 to Reference Dolby Vision, AI-assisted | `CB1-HDR10DVR.0.1.2` |
-| HDR10 to Dolby Vision Adaptive HDR Mapping, AI-assisted | `CB1-HDR10DVA.0.5` |
+| HDR10 to Reference Dolby Vision, AI-assisted | `CB1-HDR10DVR.0.1.3` |
+| HDR10 to Dolby Vision Adaptive HDR Mapping, AI-assisted | `CB1-HDR10DVA.0.7` |
 
 Identifiers are defined in `src/cb1_circuit.c`. A circuit revision changes when
 its processing contract or rendered result changes. Player UI and driver-only
