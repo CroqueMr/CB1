@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "reference_test.h"
 #include "dvbridge_gl_frame.h"
+#include <libplacebo/dispatch.h>
+#include <libplacebo/shaders/custom.h>
 
 #ifndef CB1_FEL_FILTER_API
 extern void dvbridge_renderer_set_fel_nearest(struct dvbridge_renderer *,bool) __attribute__((weak));
@@ -137,18 +139,21 @@ static pl_tex render_mode(struct dvbridge_renderer *r,const struct pl_frame *sou
     return out->intermediate;
 }
 
-static void qualify_modes(struct reference_gpu *g)
+static void qualify_modes(struct reference_gpu *g,bool base_rows)
 {
     const int w=64,h=48;
     float base[w*h*4],actual[w*h*4],expected[w*h*4];
-    for(int i=0;i<w*h;i++)for(int c=0;c<4;c++)base[4*i+c]=c==3?1.f:.25f+c*.01f;
+    for(int y=0;y<h;y++)for(int x=0;x<w;x++)for(int c=0;c<4;c++)
+        base[4*(y*w+x)+c]=c==3?1.f:.25f+c*.01f+(base_rows && (y&1)?.05f:0.f);
     pl_tex bl=reference_texture(g->gl->gpu,w,h,base);
     /* Vertical variation avoids half-texel tie ambiguity in this path comparison. */
-    pl_tex small=residual(g->gl->gpu,w,h/2,w,h/2,0,false);
     uint16_t data[w*h*4];
     for(int y=0;y<h;y++)for(int x=0;x<w;x++)for(int c=0;c<4;c++)
-        data[(y*w+x)*4+c]=c==3?65535:(384+((x*3+(y/2)*5+c)%5)*64)<<6;
+        data[(y*w+x)*4+c]=c==3?65535:(base_rows?512:384+((x*3+(y/2)*5+c)%5)*64)<<6;
     pl_fmt fmt=pl_find_fmt(g->gl->gpu,PL_FMT_UNORM,4,16,16,PL_FMT_CAP_SAMPLEABLE);assert(fmt);
+    pl_tex small=base_rows?pl_tex_create(g->gl->gpu,pl_tex_params(.w=w,.h=h/2,
+        .format=fmt,.sampleable=true,.initial_data=data)):residual(g->gl->gpu,w,h/2,w,h/2,0,false);
+    assert(small);
     pl_tex full=pl_tex_create(g->gl->gpu,pl_tex_params(.w=w,.h=h,.format=fmt,
         .sampleable=true,.initial_data=data));assert(full);
     struct pl_frame source=reference_frame(bl,w,h),el=reference_frame(small,w,h/2);
@@ -181,6 +186,10 @@ static void qualify_modes(struct reference_gpu *g)
         for(int i=0;i<w*h*4;i++)if(!isfinite(actual[i]) || fabsf(actual[i]-expected[i])>=3e-5f){
             fprintf(stderr,"mode=%d at=%d actual=%.9g oracle=%.9g\n",mode,i,actual[i],expected[i]);
             assert(!"FEL filter circuit comparison failed");
+        }
+        if(base_rows)for(int y=8;y<h-8;y+=2){
+            /* The EL repeats on each row pair; independent BL detail must not. */
+            assert(fabsf(actual[4*(y*w+w/2)]-actual[4*((y+1)*w+w/2)])>1e-4f);
         }
         dvbridge_renderer_destroy(nearest);dvbridge_renderer_destroy(oracle);
         glFinish();dvbridge_retirement_owner_poll(a);dvbridge_retirement_owner_poll(b);
@@ -273,6 +282,95 @@ static void qualify_planes(struct reference_gpu *g,bool planar,bool flip)
     pl_tex_destroy(g->gl->gpu,&bl);av_free(m);
 }
 
+static void qualify_imported_base_rows(struct reference_gpu *g,int w,int h,int modes)
+{
+    pl_gpu gpu=g->gl->gpu;
+    pl_tex textures[4]={0};
+    struct dvbridge_gl_frame imported[2]={0};
+    for(int layer=0;layer<2;layer++){
+        struct dvbridge_gl_plane handles[3]={0};
+        for(int p=0;p<2;p++){
+            int pw=w>>(layer+p),ph=h>>(layer+p),components=p?2:1;
+            uint16_t *data=malloc((size_t)pw*ph*components*sizeof(*data));assert(data);
+            for(int y=0;y<ph;y++)for(int x=0;x<pw;x++)for(int c=0;c<components;c++)
+                data[(y*pw+x)*components+c]=(layer || p?512:256+(y&1)*128)<<6;
+            pl_fmt fmt=pl_find_fmt(gpu,PL_FMT_UNORM,components,16,16,PL_FMT_CAP_SAMPLEABLE);assert(fmt);
+            pl_tex tex=textures[layer*2+p]=pl_tex_create(gpu,pl_tex_params(.w=pw,.h=ph,
+                .format=fmt,.sampleable=true,.initial_data=data));assert(tex);
+            free(data);
+            handles[p]=(struct dvbridge_gl_plane){pl_opengl_unwrap(gpu,tex,NULL,NULL,NULL),pw,ph};
+        }
+        assert(dvbridge_gl_frame_import(&imported[layer],gpu,DVBRIDGE_P010,w>>layer,h>>layer,handles));
+        dvbridge_gl_frame_set_chroma(&imported[layer],PL_CHROMA_TOP_LEFT);
+    }
+    /* Independent raw-texel oracle: bypass plane wrapping, siting and renderer
+     * addressing, and check its samples against the CPU fixture before use. */
+    pl_tex packed=reference_texture(gpu,w,h,NULL);
+    struct pl_shader_desc descriptors[2]={
+        {.desc={.name="base_y",.type=PL_DESC_SAMPLED_TEX},.binding={.object=textures[0]}},
+        {.desc={.name="base_uv",.type=PL_DESC_SAMPLED_TEX},.binding={.object=textures[1]}},
+    };
+    pl_dispatch dispatch=pl_dispatch_create(NULL,gpu);assert(dispatch);
+    pl_shader sh=pl_dispatch_begin(dispatch);
+    assert(pl_shader_custom(sh,&(struct pl_custom_shader){
+        .input=PL_SHADER_SIG_NONE,.output=PL_SHADER_SIG_COLOR,.output_w=w,.output_h=h,
+        .descriptors=descriptors,.num_descriptors=2,
+        .body="ivec2 p=ivec2(gl_FragCoord.xy);color=vec4(texelFetch(base_y,p,0).r,texelFetch(base_uv,p/2,0).rg,1.0);"}));
+    assert(pl_dispatch_finish(dispatch,pl_dispatch_params(.shader=&sh,.target=packed)));
+    const size_t frame_bytes=(size_t)w*h*4*sizeof(float);
+    float *raw=malloc(frame_bytes),*actual=malloc(frame_bytes),
+        *expected=malloc(frame_bytes),*without_el=malloc(frame_bytes);
+    assert(raw && actual && expected && without_el);
+    reference_read(gpu,packed,0,0,w,h,raw);
+    for(int y=0;y<h;y++)for(int x=0;x<w;x++)for(int c=0;c<4;c++){
+        float want=c==3?1.f:(float)((c?512:256+(y&1)*128)<<6)/65535.f;
+        assert(fabsf(raw[(y*w+x)*4+c]-want)<1e-7f);
+    }
+    struct pl_frame oracle=reference_frame(packed,w,h);
+    oracle.planes[0].components=3;
+    oracle.repr.bits=imported[0].frame.repr.bits;
+    size_t bytes;AVDOVIMetadata *m=task3_fixture(&bytes);
+    m->num_ext_blocks=1;
+    *av_dovi_get_ext(m,0)=(AVDOVIDmData){.level=1,.l1={.max_pq=3079,.avg_pq=1500}};
+    AVDOVIDataMapping *mapping=av_dovi_get_mapping(m);
+    mapping->nlq_method_idc=AV_DOVI_NLQ_LINEAR_DZ;
+    for(int c=0;c<3;c++){
+        mapping->nlq[c].nlq_offset=512;mapping->nlq[c].linear_deadzone_slope=4096;
+        mapping->nlq[c].vdr_in_max=1023*4096;
+    }
+    struct dvbridge_geometry geometry={w,h,0,0,w,h};
+    struct dvbridge_renderer *r=dvbridge_renderer_create(gpu),*reference=dvbridge_renderer_create(gpu);
+    assert(r && reference);
+    dvbridge_renderer_set_fel_nearest(r,true);dvbridge_renderer_set_fel_nearest(reference,true);
+    for(int mode=0;mode<modes;mode++)for(int paired=0;paired<2;paired++){
+        av_dovi_get_header(m)->disable_residual_flag=!paired;
+        imported[0].frame.enhancement_layer=oracle.enhancement_layer=paired?&imported[1].frame:NULL;
+        reference_read(gpu,render_mode(r,&imported[0].frame,m,bytes,geometry,mode),0,0,w,h,actual);
+        reference_read(gpu,render_mode(reference,&oracle,m,bytes,geometry,mode),0,0,w,h,expected);
+        float maximum=0,neutral_error=0,min_row=1;
+        for(int i=0;i<w*h*4;i++){
+            assert(isfinite(actual[i]) && isfinite(expected[i]));
+            maximum=fmaxf(maximum,fabsf(actual[i]-expected[i]));
+            if(paired)neutral_error=fmaxf(neutral_error,fabsf(actual[i]-without_el[i]));
+        }
+        for(int y=0;y<h;y+=2){
+            float difference=0;
+            for(int c=0;c<3;c++)difference=fmaxf(difference,
+                fabsf(actual[4*(y*w+w/2)+c]-actual[4*((y+1)*w+w/2)+c]));
+            min_row=fminf(min_row,difference);
+        }
+        fprintf(stderr,"P010 BL rows mode=%d EL=%d oracle_max=%.9g neutral_max=%.9g row_min=%.9g\n",
+            mode,paired,maximum,neutral_error,min_row);
+        assert(maximum<3e-5f && neutral_error<3e-5f && min_row>1e-4f);
+        if(!paired)memcpy(without_el,actual,frame_bytes);
+    }
+    dvbridge_renderer_destroy(r);dvbridge_renderer_destroy(reference);av_free(m);
+    for(int i=0;i<2;i++)dvbridge_gl_frame_release(&imported[i]);
+    for(int i=0;i<4;i++)pl_tex_destroy(gpu,&textures[i]);
+    pl_tex_destroy(gpu,&packed);pl_dispatch_destroy(&dispatch);
+    free(raw);free(actual);free(expected);free(without_el);
+}
+
 int main(void)
 {
     assert(dvbridge_renderer_set_fel_nearest && "Explicit FEL filter API missing");
@@ -280,9 +378,11 @@ int main(void)
     for(int flip=0;flip<2;flip++){
         qualify(&g,32,24,flip);qualify(&g,33,25,flip);
     }
-    qualify_modes(&g);
+    qualify_modes(&g,false);qualify_modes(&g,true);
     for(int planar=0;planar<2;planar++)for(int flip=0;flip<2;flip++)
         qualify_planes(&g,planar,flip);
+    qualify_imported_base_rows(&g,64,48,2);
+    qualify_imported_base_rows(&g,3840,2160,1);
     reference_gpu_destroy(&g);
     puts("PASS FEL nearest phase, borders, residual, policy reset and non-FEL identity");
 }
