@@ -8,12 +8,26 @@
 
 struct dvbridge_renderer;
 struct cb1_ai_result;
+struct dvbridge_native_overlay;
+#define CB1_AI_OVERLAY_API 1
 #define CB1_HDR10_AI_RENDER_API 1
 /* Borrowed intermediate. DV preparation may still need its existing poll;
  * resolve and successful presentation remain separate from this call. */
 pl_tex dvbridge_render_hdr10_ai_rgb(struct dvbridge_renderer *renderer,
     const struct dvbridge_policy *policy,const struct cb1_ai_result *prediction,
     const struct pl_frame *source,const struct dvbridge_geometry *geometry);
+/* Private Standard-AI full-raster output. The target/FBO pair is the caller's
+ * existing resolve ownership assertion; false can follow GPU submission.
+ * Retain source imports and poll normal retirement before RGB fallback. */
+bool dvbridge_render_hdr10_ai_packed(struct dvbridge_renderer *renderer,
+    const struct dvbridge_policy *policy,const struct cb1_ai_result *prediction,
+    const struct pl_frame *source,const struct dvbridge_geometry *geometry,
+    pl_tex target,unsigned framebuffer,bool flip_y);
+/* Final Standard-AI composition only; GUI never enters metadata analysis. */
+bool dvbridge_render_hdr10_ai_packed_overlay(struct dvbridge_renderer *renderer,
+    const struct dvbridge_policy *policy,const struct cb1_ai_result *prediction,
+    const struct pl_frame *source,const struct dvbridge_geometry *geometry,
+    pl_tex target,unsigned framebuffer,bool flip_y,const struct dvbridge_native_overlay *overlay);
 struct dvbridge_retirement_owner;
 #define DVBRIDGE_CM4_GPU_API 1
 /* Trim-only shader in linear 203-nit units. The caller retains the shader. */
@@ -74,6 +88,15 @@ struct dvbridge_hdr10_policy_output {
 struct dvbridge_renderer *dvbridge_renderer_create(pl_gpu gpu);
 void dvbridge_renderer_destroy(struct dvbridge_renderer *renderer);
 void dvbridge_renderer_reset(struct dvbridge_renderer *renderer);
+#define CB1_OPTIMIZED_DV_API 1
+/* Select the next picture's DV composition. Default false; HDR10 is unchanged. */
+void dvbridge_renderer_set_optimized_dv(struct dvbridge_renderer *renderer, bool enabled);
+#define CB1_FAST_CHROMA_API 1
+/* Next-picture input chroma filter for every CB1 circuit. Default false; luma is unchanged. */
+void dvbridge_renderer_set_fast_chroma(struct dvbridge_renderer *renderer, bool enabled);
+
+#define CB1_PROCESSING_OPTIMIZATIONS_API 1
+void dvbridge_renderer_set_processing_optimizations(struct dvbridge_renderer *renderer, bool enabled);
 
 /* Requires the renderer's current borrowed GL context. GPU requirements only;
  * source/TV policy, allocation success and HDMI admission are separate checks.
@@ -97,6 +120,20 @@ bool dvbridge_render_hdr10_rgb(struct dvbridge_renderer *renderer,
 bool dvbridge_render_packed(struct dvbridge_renderer *renderer, const struct pl_frame *source,
                            const void *metadata, size_t bytes, double pts, double el_pts,
                            struct dvbridge_geometry geometry, pl_tex target, bool flip_y);
+#define DVBRIDGE_NATIVE_OVERLAY_API 1
+/* Borrowed Kodi subtitle texture and sRGB transfer LUTs. Row zero is the logical bottom;
+ * rect is a clipped, even-x screen rectangle in top-down 3840x2160 coordinates.
+ * An all-zero rectangle keeps the same shader ready without drawing a subtitle.
+ * The caller retains textures until GPU completion. Video metadata is unchanged. */
+struct dvbridge_native_overlay {
+    pl_tex texture, degamma, pq;
+    float rect[4];
+    bool input_pq; /* Premultiplied BT.2020 PQ; LUTs remain bound but unused. */
+};
+bool dvbridge_render_packed_overlay(struct dvbridge_renderer *renderer,
+    const struct pl_frame *source, const void *metadata, size_t bytes,
+    double pts, double el_pts, struct dvbridge_geometry geometry,
+    pl_tex target, bool flip_y, const struct dvbridge_native_overlay *overlay);
 pl_tex dvbridge_render_texture(const struct dvbridge_renderer *renderer);
 /* Quantize the composed PQ image without applying tone mapping again. */
 bool dvbridge_render_hdr10(struct dvbridge_renderer *renderer, pl_tex target,
@@ -129,7 +166,19 @@ enum dvbridge_dv_policy_status dvbridge_render_dv_policy_prepare(
     struct dvbridge_renderer *renderer,const struct dvbridge_policy *policy,
     const struct dvbridge_identity *identity,const struct pl_frame *source,
     const void *metadata,size_t bytes,double pts,double el_pts,struct dvbridge_geometry geometry);
+#define DVBRIDGE_ENHANCED_PACKED_API 1
+/* Same metadata adjustment with native full-raster packing and optional subtitles.
+ * Other GUI/capture composition retains the RGB intermediate prepare above. */
+enum dvbridge_dv_policy_status dvbridge_render_dv_policy_prepare_packed(
+    struct dvbridge_renderer *renderer,const struct dvbridge_policy *policy,
+    const struct dvbridge_identity *identity,const struct pl_frame *source,
+    const void *metadata,size_t bytes,double pts,double el_pts,struct dvbridge_geometry geometry,
+    pl_tex target,bool flip_y,const struct dvbridge_native_overlay *overlay);
 enum dvbridge_dv_policy_status dvbridge_render_dv_policy_poll(struct dvbridge_renderer *renderer);
+#define CB1_PACKED_AHEAD_API 1
+/* Retain one committed packed frame's GPU lease while preparing the next.
+ * Other paths keep normal polling; a third outstanding frame returns Busy. */
+enum dvbridge_dv_policy_status dvbridge_render_dv_policy_advance(struct dvbridge_renderer *renderer);
 const struct dvbridge_dv_policy_output *dvbridge_render_dv_policy_output(const struct dvbridge_renderer *renderer);
 /* target/FBO pair is the caller's matching-context assertion for opaque output.
  * Store the FBO when wrapping output; never guess zero from unwrap failure.

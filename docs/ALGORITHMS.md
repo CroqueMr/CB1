@@ -1,6 +1,6 @@
 # Algorithms and metadata
 
-This reference describes **CB1 0.1** and the circuits listed in
+This reference describes **CB1 0.2** and the circuits listed in
 [CIRCUITS.md](CIRCUITS.md). Equations describe the implemented processing
 contract, not a certified reproduction of Dolby's proprietary display mapper.
 
@@ -47,7 +47,7 @@ display peak or an output brightness cap.
 
 ## Metadata use
 
-| Metadata | Standard DV | HDR10 conversion | Authored-DV Enhanced |
+| Metadata | Standard Dolby Vision | HDR10 conversion | Authored Dolby Vision Enhanced |
 | --- | --- | --- | --- |
 | RPU reconstruction data | Reconstruct and transport | Reconstruct before conversion | Same reconstruction as Standard |
 | L1 min/max/average | Transport | Maximum/average guide scene mapping; minimum validated and retained | Retained; scene ratio guides trim adjustment |
@@ -191,9 +191,9 @@ peak exceeds the output reference and the weight is nonzero. Otherwise it is
 retained but not reported as applied. L2 compatibility and L8 are never stacked
 as two creative passes.
 
-## Authored DV Enhanced: Natural and Signature
+## Authored Dolby Vision Enhanced: Natural and Signature
 
-The `cb1-dve-v3` policy keeps Standard-equivalent reconstructed pixels. It fits
+The `cb1-dve-v6` policy keeps Standard-equivalent reconstructed pixels. It fits
 the five existing L2/L8 primary controls to a bounded objective. L1/L3,
 mastering descriptors, target descriptions and secondary controls remain intact.
 
@@ -218,14 +218,14 @@ x = clamp(v/A)
 black_gate = H(v)                       // transition from 0 to 1 nit
 highlight_gate = H((x-0.25)/0.75)
 Natural gain = S * black_gate * 0.04 * max(0,h) * highlight_gate
-Signature gain = S * black_gate * 0.04
+Signature gain = S * black_gate * 0.02
 goal = v + gain * max(0,v) * (1-x)
 ```
 
 An additional channel-headroom factor prevents the luminance goal from pushing
 the largest RGB component beyond the anchor peak. The goal's chroma multiplier
 is `2^(S*C*clamp(1-maxRGB/A)/4096)`, with `C=32*max(0,h)` for Natural and
-`C=64` for Signature.
+`C=32` for Signature.
 
 Natural protects low/mid tones and expands eligible highlights; it can remain
 neutral at a matching or lower reference. Signature permits a stronger bounded

@@ -1,7 +1,7 @@
 # CB1
 
 CB1 is an open-source Dolby Vision processing engine with HDR10 conversion.
-**CB1 0.1** is a C11 static library linked into the player's render path, without
+**CB1 0.2** is a C11 static library linked into the player's render path, without
 a separate service or external player.
 
 
@@ -71,7 +71,10 @@ repository with the exact CPU/GPU, display, connection chain and build version.
 
 ## Known issues
 
-- Some frame drops with Profile 7 FEL on a small number of files on N100/N150.
+- On lower-powered GPUs such as Intel N100, displaying the GUI over Dolby Vision playback can cause stuttering.
+- Some 59.94 FPS Dolby Vision sources still drop frames on N100.
+- Enhanced presets need further tuning to produce a more noticeable visual effect.
+- Profile 5 black-screen reports on some AMD and Intel Xe configurations remain under investigation.
 
 Test media and training datasets are excluded. No affiliation with or certification
 by Dolby, Intel or AMD.
