@@ -89,16 +89,24 @@ static int64_t dvbridge_fel_seek_point_at(AVFormatContext *format, int video, in
                 AVCodecContext *codec = is_el ? ec : bc;
                 if (av_bsf_send_packet(filter, packet) < 0) break;
                 while (av_bsf_receive_packet(filter, el) >= 0) {
-                    int64_t pts = av_rescale_q(el->pts, filter->time_base_out, stream->time_base);
+                    if (el->pts == AV_NOPTS_VALUE) {
+                        av_packet_unref(el);
+                        continue;
+                    }
+                    const int at_target = av_compare_ts(el->pts, filter->time_base_out,
+                                                        target, stream->time_base);
                     uint8_t *out; int size;
-                    if (el->pts != AV_NOPTS_VALUE && pts > target) passed |= is_el ? 2 : 1;
-                    if (el->pts != AV_NOPTS_VALUE && pts <= target &&
+                    if (at_target > 0) passed |= is_el ? 2 : 1;
+                    if (at_target <= 0 &&
                         av_parser_parse2(parser,codec,&out,&size,el->data,el->size,
                             el->pts,el->dts,el->pos) == el->size && size > 0 && parser->key_frame == 1) {
-                        if (is_el) { el_key = pts; el_position = el->pos; }
-                        else { base_key = pts; base_position = el->pos; }
-                        if (base_key != AV_NOPTS_VALUE && base_key == el_key) {
-                            found = base_key;
+                        if (is_el) { el_key = el->pts; el_position = el->pos; }
+                        else { base_key = el->pts; base_position = el->pos; }
+                        // Compare the source clocks before converting to a single time base.
+                        if (base_key != AV_NOPTS_VALUE && el_key != AV_NOPTS_VALUE &&
+                            av_compare_ts(base_key, base->time_base_out,
+                                          el_key, split->time_base_out) == 0) {
+                            found = av_rescale_q(base_key, base->time_base_out, stream->time_base);
                             found_position = base_position >= 0 && el_position >= 0 ?
                                 (base_position < el_position ? base_position : el_position) : -1;
                         }
