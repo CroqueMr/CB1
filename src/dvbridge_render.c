@@ -143,6 +143,8 @@ struct dvbridge_renderer {
     struct dvbridge_dv_slot dv, retired_packed;
     struct dvbridge_analysis_storage analysis_storage;
     bool reuse_authored_storage;
+    bool authored_p5_analytic;
+    bool master_ipt_compact;
 #ifdef CB1_TEST_LEGACY_ANALYSIS
     GLuint dv_analysis_program;
 #endif
@@ -1049,7 +1051,7 @@ static struct pl_hook_res pack_active_area(void *priv, const struct pl_hook_para
             .desc={.name=i?"ipt_oetf":"ipt_eotf",.type=PL_DESC_SAMPLED_TEX},
             .binding={.object=mask->ipt_pq[i],.sample_mode=PL_TEX_SAMPLE_NEAREST}};
     char header[sizeof(CB1_CARRIER_GLSL CB1_PACKET_GLSL CB1_SOURCE_CODES_GLSL CB1_RGB_PIXEL_GLSL CB1_COMPOSITE_HEADER_GLSL CB1_MASTER_IPT_GLSL CB1_IPT_CODES_GLSL)+512];
-    snprintf(header,sizeof(header),"%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+    snprintf(header,sizeof(header),"%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
         mask->source_domain ? "#define CB1_SOURCE_DOMAIN 1\n" : "",
         mask->overlay ? "#define CB1_NATIVE_OVERLAY 1\n" : "",
         mask->overlay && mask->overlay->input_pq ? "#define CB1_OVERLAY_PQ 1\n" : "",
@@ -1061,6 +1063,7 @@ static struct pl_hook_res pack_active_area(void *priv, const struct pl_hook_para
             "#define CB1_SOURCE_BLACK .0625\n",
         mask->scaled_quad || mask->ipt_quad ? "#define CB1_SCALED_QUAD 1\n" : "",
         mask->ipt_quad ? "#define CB1_IPT_QUAD 1\n" : "",
+        mask->ipt && mask->ipt_pq[0]->params.format->num_components==1 ? "#define CB1_IPT_COMPACT 1\n" : "",
         mask->ipt ? CB1_MASTER_IPT_GLSL : "",
         mask->ipt ? "#define CB1_SOURCE_NEUTRAL (ipt_offset*(4096.0/4095.0))\n" :
             "#define CB1_SOURCE_NEUTRAL vec3(CB1_SOURCE_BLACK,.5,.5)\n",
@@ -1165,12 +1168,17 @@ struct dvbridge_renderer *dvbridge_renderer_create(pl_gpu gpu)
     if (gl) {
         const char *vendor = (const char *)glGetString(GL_VENDOR);
         const char *renderer = (const char *)glGetString(GL_RENDERER);
+        const bool intel=vendor && !strcmp(vendor,"Intel");
         /* Retain storage/overlap only on the driver with a measured gain. */
-        r->reuse_authored_storage=vendor && !strcmp(vendor,"Intel");
+        r->reuse_authored_storage=intel;
+        /* Analytic P5 expansion saves work on Intel; radeonsi retains its LUT. */
+        r->authored_p5_analytic=intel;
         /* The existing encoder saves ALU work on radeonsi, not on Intel. */
         r->expert_warp_lookup=renderer && strstr(renderer,"radeonsi");
+        /* Scalar tables retain exact samples; use them only on radeonsi. */
+        r->master_ipt_compact=renderer && strstr(renderer,"radeonsi");
         // ADL-N RGBA16F conversion/interpolation was verified by GPU readback.
-        r->exact_scaler_cache = vendor && !strcmp(vendor, "Intel") &&
+        r->exact_scaler_cache = intel &&
                                 renderer && strstr(renderer, "(ADL-N)");
     }
     if (gl && pl_opengl_has_ext(gl, "GL_KHR_shader_subgroup")) {
@@ -2124,7 +2132,7 @@ static enum cb1_master_status render_master_reference(struct dvbridge_renderer *
     ipt_output=ipt_output && !dvbridge_dv_profile5_transport(metadata);
     struct cb1_master_ipt ipt;
     if(ipt_output && !cb1_master_ipt_prepare(&ipt,metadata,bytes))return CB1_MASTER_UNSUPPORTED;
-    if(ipt_output && !cb1_master_ipt_tables(r->gpu,r->ipt_pq))return CB1_MASTER_GPU_UNAVAILABLE;
+    if(ipt_output && !cb1_master_ipt_tables(r->gpu,r->ipt_pq,r->master_ipt_compact))return CB1_MASTER_GPU_UNAVAILABLE;
     return render_packed_overlay(r,source,metadata,bytes,pts,el_pts,geometry,target,flip,overlay,false,&raw,false,ipt_output?&ipt:NULL)?
         CB1_MASTER_READY:CB1_MASTER_FAILED;
 }
@@ -2805,14 +2813,14 @@ static bool dve_immutable(struct dvbridge_renderer *r,pl_tex *texture,GLuint *na
     }
     return *texture!=NULL;
 }
-static bool dve_allocate(struct dvbridge_renderer *r,unsigned width,unsigned height,bool ai_fused,bool fast_fel)
+static bool dve_allocate(struct dvbridge_renderer *r,unsigned width,unsigned height,bool ai_fused,bool fast_pq)
 {
     if(r->enhanced_authored){GLint shared;glGetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE,&shared);if(shared<3584)return false;}
     if(!width || !height || width>3840 || height>2160 || !dve_requirements(r->gpu))return false;
-    r->enhanced_fast_pq=fast_fel;
-    size_t scratch_bytes=fast_fel?1036800:((width*height+127)/128)*16;
+    r->enhanced_fast_pq=fast_pq;
+    size_t scratch_bytes=fast_pq?1036800:((width*height+127)/128)*16;
     if(!dv_allocate(r,scratch_bytes))return false;
-    bool pq_lookup=!fast_fel && cb1_processing_pq_encoder(&r->processing,r->gpu)!=NULL;
+    bool pq_lookup=!fast_pq && cb1_processing_pq_encoder(&r->processing,r->gpu)!=NULL;
     GLint images;glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS,&images);
     GLint fragment_images;glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS,&fragment_images);
     r->ai_enhanced_fused=ai_fused && !r->ai_fusion_failed && fragment_images>=2;
@@ -3144,8 +3152,11 @@ static enum dvbridge_dv_policy_status dv_policy_prepare(struct dvbridge_renderer
     }else pl_tex_destroy(r->gpu,&r->enhanced_input);
     if(packed && !pixels && !r->fragment_quad)return DVBRIDGE_DV_UNSUPPORTED;
     bool fel=color.dovi.nlq_active && source->enhancement_layer && pts==el_pts;
-    bool fast_fel=pixels && r->enhanced_linear && r->fast_chroma && fel;
-    if(!(pixels?dve_allocate(r,reconstruction_width,reconstruction_height,false,fast_fel):dv_allocate_transport(r)))return DVBRIDGE_DV_UNSUPPORTED;
+    bool fast_pq=pixels && r->enhanced_linear && r->fast_chroma &&
+        (fel || (r->authored_p5_analytic && policy->adaptive==DVBRIDGE_ADAPTIVE_B_FP16 &&
+                 geometry.source_width==3840 && geometry.source_height==2160 &&
+                 dvbridge_dv_profile5_transport(metadata)));
+    if(!(pixels?dve_allocate(r,reconstruction_width,reconstruction_height,false,fast_pq):dv_allocate_transport(r)))return DVBRIDGE_DV_UNSUPPORTED;
     struct dvbridge_dv_slot *s=&r->dv;
     s->output_metadata=av_memdup(metadata,bytes);s->output_bytes=bytes;
     if(!s->output_metadata){dv_release(r);return DVBRIDGE_DV_FAILED;}
@@ -3760,7 +3771,8 @@ static struct pl_hook_res ai_enhanced_output(void *priv,const struct pl_hook_par
         .desc={.name=names[i],.type=PL_DESC_SAMPLED_TEX},
         .binding={.object=r->processing.pq_texture[i],.sample_mode=PL_TEX_SAMPLE_LINEAR}};
     char header[sizeof(dve_math)+512];
-    snprintf(header,sizeof(header),"%s%s%s%s#define color_guidance (guidance.x!=0)\n#define hue_guidance (guidance.y!=0)\n%s",
+    /* Clipped RGB, positive LMS coefficients and expansion keep LUT inputs nonnegative. */
+    snprintf(header,sizeof(header),"%s%s%s%s#define CB1_AI_NONNEGATIVE_PQ 1\n#define color_guidance (guidance.x!=0)\n#define hue_guidance (guidance.y!=0)\n%s",
         r->ai_enhanced_prepack?"#define CB1_AI_PREPACK 1\n":"",
         r->enhanced_pq_lookup?"#define CB1_DVE_PQ_LOOKUP 1\n":"",
         r->ai_enhanced_prepack && r->dv.ai_direct_lean?"#define CB1_AI_SKIP_AUX 1\n":"",
