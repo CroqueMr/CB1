@@ -11,7 +11,7 @@ target_include_directories(trim_contract PRIVATE "${DVBRIDGE_SOURCE_DIR}")
 target_link_libraries(trim_contract PRIVATE m)
 add_test(NAME trim_contract COMMAND trim_contract)
 
-foreach(name frame_geometry task3_native metadata_transport overlay_metadata cm4_bounds presentation_transaction
+foreach(name source_chroma frame_geometry task3_native metadata_transport overlay_metadata cm4_bounds presentation_transaction
              placebo_mapping gles_pack gles_reshape render_lifecycle fel_queue dmabuf_layout metadata_bounds
              policy candidate_identity metadata_eligibility hdr10_ai_contract hdr10_ai_wire_order creative_mapping creative_descriptors creative_cm4 dvbridge_cache_key shader_cache dmabuf_identity profile5_direct master_ipt)
   add_executable(${name} ${name}.c)
@@ -137,11 +137,12 @@ foreach(target 0 1 2 3 4 5 6)
 endforeach()
 set_tests_properties(enhanced_dv_capability PROPERTIES SKIP_RETURN_CODE 77)
 target_compile_options(gles_pack PRIVATE -ffp-contract=off)
-foreach(name reference_expert hdr10_expert_peak expert_neutral_start expert_matrix reference_images reference_transfer reference_source reference_scaler reference_scaled_output reference_sampler enhanced_dv_images enhanced_dv_analysis creative_images)
+foreach(name reference_expert expert_black_floor hdr10_expert_peak expert_neutral_start expert_matrix reference_images reference_transfer reference_source reference_scaler reference_scaled_output reference_sampler enhanced_dv_images enhanced_dv_analysis creative_images)
   add_executable(${name} ${name}.c)
   target_link_libraries(${name} PRIVATE dvbridge_core)
 endforeach()
 add_test(NAME reference_expert COMMAND reference_expert)
+add_test(NAME expert_black_floor COMMAND expert_black_floor)
 add_test(NAME hdr10_expert_peak COMMAND hdr10_expert_peak)
 add_test(NAME expert_neutral_start COMMAND expert_neutral_start)
 add_test(NAME expert_matrix COMMAND expert_matrix)
