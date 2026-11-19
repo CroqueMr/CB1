@@ -9,7 +9,7 @@
 static AVRational base_clock = {1, 1000};
 static AVRational enhancement_clock = {1, 90000};
 static int64_t anchor, enhancement_offset;
-static unsigned reads;
+static unsigned reads, uneven;
 
 static int test_seek(AVFormatContext *format, int stream, int64_t position, int flags)
 {
@@ -24,14 +24,17 @@ static int test_seek(AVFormatContext *format, int stream, int64_t position, int 
 static int test_read(AVFormatContext *format, AVPacket *packet)
 {
     (void)format;
-    if (reads >= 2)
+    if (reads >= (uneven ? 3u : 2u))
         return AVERROR_EOF;
-    const bool enhancement = reads++ == 1;
+    const unsigned packet_index = reads++;
+    const bool enhancement = uneven == 1 ? packet_index == 2 :
+                             uneven == 2 ? packet_index != 2 : packet_index == 1;
+    const int64_t source = uneven ? anchor - 200 + (packet_index == 1 ? 100 : 0) : anchor;
     assert(av_new_packet(packet, sizeof(synthetic_paired)) == 0);
     memcpy(packet->data, synthetic_paired, sizeof(synthetic_paired));
     packet->stream_index = enhancement;
     packet->pts = packet->dts = enhancement
-        ? av_rescale_q(anchor, base_clock, enhancement_clock) + enhancement_offset : anchor;
+        ? av_rescale_q(source, base_clock, enhancement_clock) + enhancement_offset : source;
     packet->pos = enhancement ? 100 : 200;
     return 0;
 }
@@ -80,6 +83,11 @@ int main(void)
     for (enhancement_offset = -1; enhancement_offset <= 1; enhancement_offset += 2) {
         assert(dvbridge_fel_seek_point_at(format, 0, 1000, &first_position, NULL) == AV_NOPTS_VALUE);
         assert(first_position == -1);
+    }
+    enhancement_offset = 0;
+    for (uneven = 1; uneven <= 2; ++uneven) {
+        assert(dvbridge_fel_seek_point_at(format, 0, 1000, &first_position, NULL) == 800);
+        assert(first_position == 100);
     }
     avformat_free_context(format);
 }

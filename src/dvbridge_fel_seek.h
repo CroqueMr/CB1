@@ -8,6 +8,8 @@
 #include <limits.h>
 #include <stdbool.h>
 
+struct dvbridge_seek_key { int64_t pts, position; };
+
 /* Header-only bounded random-access probe. The caller must perform its final
  * av_seek_frame after this probe, including on failure. No pixels are decoded.
  * Target and result use the selected video stream's time base. */
@@ -54,8 +56,11 @@ static int64_t dvbridge_fel_seek_point_at(AVFormatContext *format, int video, in
         AVCodecParserContext *ep = av_parser_init(AV_CODEC_ID_HEVC);
         AVCodecContext *bc = avcodec_alloc_context3(NULL), *ec = avcodec_alloc_context3(NULL);
         AVPacket *packet = av_packet_alloc(), *el = av_packet_alloc();
-        int64_t base_key = AV_NOPTS_VALUE, el_key = AV_NOPTS_VALUE;
-        int64_t base_position = -1, el_position = -1;
+        int64_t base_key = AV_NOPTS_VALUE;
+        // Independently interleaved tracks may deliver several keys ahead.
+        enum { seek_key_history = 128 };
+        struct dvbridge_seek_key keys[2][seek_key_history];
+        unsigned key_count[2] = {0};
         unsigned passed = 0;
         if (!bp || !ep || !bc || !ec || !packet || !el ||
             av_bsf_list_parse_str(enhancement < 0 ? "dovi_split=mode=el" : "hevc_mp4toannexb", &split) < 0 ||
@@ -100,16 +105,23 @@ static int64_t dvbridge_fel_seek_point_at(AVFormatContext *format, int video, in
                     if (at_target <= 0 &&
                         av_parser_parse2(parser,codec,&out,&size,el->data,el->size,
                             el->pts,el->dts,el->pos) == el->size && size > 0 && parser->key_frame == 1) {
-                        if (is_el) { el_key = el->pts; el_position = el->pos; }
-                        else { base_key = el->pts; base_position = el->pos; }
-                        // Compare the source clocks before converting to a single time base.
-                        if (base_key != AV_NOPTS_VALUE && el_key != AV_NOPTS_VALUE &&
-                            av_compare_ts(base_key, base->time_base_out,
-                                          el_key, split->time_base_out) == 0) {
-                            found = av_rescale_q(base_key, base->time_base_out, stream->time_base);
-                            found_position = base_position >= 0 && el_position >= 0 ?
-                                (base_position < el_position ? base_position : el_position) : -1;
+                        const AVRational other_clock = is_el ? base->time_base_out : split->time_base_out;
+                        const unsigned other_count = key_count[!is_el] < seek_key_history ?
+                            key_count[!is_el] : seek_key_history;
+                        for (unsigned i = 0; i < other_count; ++i) {
+                            const struct dvbridge_seek_key other = keys[!is_el][i];
+                            if (av_compare_ts(el->pts, filter->time_base_out, other.pts, other_clock))
+                                continue;
+                            const int64_t common = av_rescale_q(el->pts, filter->time_base_out, stream->time_base);
+                            if (found == AV_NOPTS_VALUE || common > found) {
+                                found = common;
+                                found_position = el->pos >= 0 && other.position >= 0 ?
+                                    (el->pos < other.position ? el->pos : other.position) : -1;
+                            }
+                            break;
                         }
+                        keys[is_el][key_count[is_el]++ % seek_key_history] =
+                            (struct dvbridge_seek_key){el->pts, el->pos};
                     }
                     av_packet_unref(el);
                 }
