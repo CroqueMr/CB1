@@ -383,7 +383,7 @@ int main(void)
         int64_t bl,el;
         assert(picture_identity(&f->base_order,p,&bl) && bl==32);
         assert(picture_identity(&f->enhancement_order,p,&el) && el==31);
-        f->packet_order[0]=el;
+        f->packets[0].order=el;
         f->times[0].order=31;f->times[0].pts=3100;
         f->times[0].key=variant==2;
         f->base_order.context->has_b_frames=variant!=1;
