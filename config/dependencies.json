@@ -1,21 +1,19 @@
 {
   "schema": 1,
   "ownership": {
-    "ffmpeg": "CB1 canonical patches",
+    "ffmpeg": "CroqueMr/FFmpeg source fork",
     "libplacebo": "CB1 canonical patches"
   },
   "ffmpeg": {
-    "version": "9.0",
-    "upstream_release_reference": "d32b387f2b0a484599d4587d651891f0c63c4238",
-    "upstream_tag": "n9.0",
-    "upstream_tag_object": "5b9252abfe2fda0ccb71ed45cd7a954cc45d2b6f",
+    "version": "9.0.2",
+    "upstream_release_reference": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+    "upstream_tag": "n9.0.2",
+    "upstream_tag_object": "ce8f11b9fac4cd7ccfb41ca7c01bc17f5cda8cc3",
     "inherited_notice_revision": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
-    "source_authority": "The exact pinned archive digest is authoritative; release-tag reference is not an archive byte-equivalence claim. Inherited notice locator is a later 9.0.2 commit and is not the extraction source.",
-    "known_release_reference_divergence": "The pinned archive dovi_rpudec.c lacks the n9.0 VALIDATE(mapping->num_x_partitions, 1, 0xFFFF) and VALIDATE(mapping->num_y_partitions, 1, 0xFFFF) lines. Metadata header and isom_tags.c match the n9.0 reference. No source pin, patch or algorithm was changed.",
-    "official_archive_verification": "A fresh HTTPS retrieval from source_url on 2026-10-01 has the exact archive_sha256 and byte-identical parser. Both official and pinned archives lack the two Git-reference lines; no cache/official-archive divergence was found.",
-    "source_url": "https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz",
-    "archive": "ffmpeg-9.0.tar.xz",
-    "archive_sha256": "7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52",
+    "source_authority": "The pinned source fork archive selects the exact compiled sources. The inherited 9.0 release archive divergence remains documented in the RC3 source inventory.",
+    "source_url": "https://github.com/CroqueMr/FFmpeg/archive/91adfbb2f53a742e75c3925be5f4d5c15f2305f0.tar.gz",
+    "archive": "FFmpeg-91adfbb2f53a742e75c3925be5f4d5c15f2305f0.tar.gz",
+    "archive_sha256": "925cfd029d6c2d2156052174523b4e2e7b5848bb50c7dd5d14d25f21addda381",
     "modified": true,
     "interfaces": [
       "AVDOVIDmData.dvbridge_raw_magic",
@@ -24,7 +22,8 @@
       "AVDOVIMetadata.ext_block_size",
       "ff_dovi_attach_side_data"
     ],
-    "compatibility": "Matched pinned modified headers and producer/consumer only; arbitrary binary mixes unsupported"
+    "compatibility": "Matched pinned modified headers and producer/consumer only; arbitrary binary mixes unsupported",
+    "fork_revision": "91adfbb2f53a742e75c3925be5f4d5c15f2305f0"
   },
   "libplacebo": {
     "version": "7.372.0",
@@ -114,7 +113,7 @@
     "libplacebo/src/shaders/dovi_reference.c": "f12c7dba16d4e2ae41c652d83bae9dc6d50f9236e4d09f988304d75774ffb09e",
     "libplacebo/src/shaders/meson.build": "f4ba519f76d227adabbab791814fb62f96d45236c08889409738de7eca31304e",
     "libplacebo/src/shaders.h": "22fc30757f176594a552acacad4c41f7a947be177e2ac88c6aef69bc3c3bc040",
-    "ffmpeg/libavformat/mpegts.c": "229c92abd17c0c9bc37338adf660515d18f84af85ba4339e782ff92e4af21565",
+    "ffmpeg/libavformat/mpegts.c": "954bdc5076ab1a96b560b5d49633be00964b97964488b24336a413fb667a28e5",
     "libplacebo/src/mmr_lut.h": "7d72e001b9c94b6b71aec11d76c19f686296b3fece23ab0123fc7061b4fefc8e",
     "ffmpeg/libavformat/matroskadec.c": "e8fbe599ef8be450b6ae1818b7392186155ec4e7ce4f5bc422786d9a7c2517c5",
     "ffmpeg/libavcodec/pgssubdec.c": "46f628e57af1c998b3654b11fe46d984db3f13e23127fd4044726216d91cf836"
