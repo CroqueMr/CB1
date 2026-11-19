@@ -83,7 +83,7 @@ static void unanchored_mel(void)
     memcpy(paired->data, synthetic_paired, sizeof(synthetic_paired));
     paired->pts = paired->dts = 3001;
     assert(dvbridge_fel_submit(fel, paired) && !fel->synchronizing);
-    assert(fel->num_packets == 1 && fel->packet_order[0] == fel->base_order.maximum);
+    assert(fel->num_packets == 1 && fel->packets[0].order == fel->base_order.maximum);
     assert(dvbridge_fel_take_mel(fel, 3001, &frame, metadata, size) == 0 && !frame);
     av_packet_free(&paired);
     av_packet_free(&base);
@@ -102,9 +102,9 @@ int main(void)
             .anchor_pts=AV_NOPTS_VALUE,.output_order=AV_NOPTS_VALUE,.num_packets=2,.packet_bytes=2};
         end.decoder=avcodec_alloc_context3(NULL);assert(end.decoder);
         end.base_order.seen=true;end.base_order.maximum=9;
-        end.packet_order[0]=scenario==2?8:10;
-        end.packet_order[1]=scenario==3?9:18;
-        for(int i=0;i<2;i++){end.packets[i]=av_packet_alloc();assert(end.packets[i]&&av_new_packet(end.packets[i],1)==0);}
+        end.packets[0].order=scenario==2?8:10;
+        end.packets[1].order=scenario==3?9:18;
+        for(int i=0;i<2;i++){end.packets[i].packet=av_packet_alloc();assert(end.packets[i].packet&&av_new_packet(end.packets[i].packet,1)==0);}
         end.num_frames=2;
         AVFrame *saved[2];
         for(int i=0;i<2;i++){
@@ -123,7 +123,7 @@ int main(void)
                            (const uint8_t[]){25,8,0,0,0x80},5));
             av_frame_free(&ready);
         }
-        for(unsigned i=0;i<end.num_packets;i++)av_packet_free(&end.packets[i]);
+        for(unsigned i=0;i<end.num_packets;i++)av_packet_free(&end.packets[i].packet);
         avcodec_free_context(&end.decoder);
     }
     terminal_mode=0;
@@ -155,7 +155,7 @@ int main(void)
     AVPacket *p=av_packet_alloc();assert(p && av_new_packet(p,sizeof(synthetic_paired))==0);
     memcpy(p->data,synthetic_paired,sizeof(synthetic_paired));p->pts=p->dts=0;
     assert(dvbridge_fel_submit(epoch,p));
-    av_packet_free(&epoch->packets[0]);epoch->num_packets=0;epoch->packet_bytes=0;
+    av_packet_free(&epoch->packets[0].packet);epoch->num_packets=0;epoch->packet_bytes=0;
     /* A whole enhancement GOP went missing. The retained BL4 is itself key;
      * independent max+1 counters would wrongly put the next EL8 in its slot. */
     epoch->num_times=0;epoch->base_order.maximum=epoch->enhancement_order.maximum=3;
@@ -167,10 +167,10 @@ int main(void)
         assert(epoch->epoch_uncertain && !epoch->num_packets);
     }
     p->pts=p->dts=800;assert(dvbridge_fel_submit(epoch,p));
-    assert(epoch->num_packets==1 && epoch->packet_order[0]==8 && !epoch->epoch_uncertain);
+    assert(epoch->num_packets==1 && epoch->packets[0].order==8 && !epoch->epoch_uncertain);
     assert(epoch->times[0].order==4 && epoch->times[0].pts==400);
-    assert(epoch->packets[0]->size==sizeof(synthetic_base));
-    assert(!memcmp(epoch->packets[0]->data,synthetic_base,sizeof(synthetic_base)));
+    assert(epoch->packets[0].packet->size==sizeof(synthetic_base));
+    assert(!memcmp(epoch->packets[0].packet->data,synthetic_base,sizeof(synthetic_base)));
     av_packet_free(&bare);av_packet_free(&p);dvbridge_fel_destroy(epoch);
     }
     /* A continuous independently coded EL key can precede its reordered BL
@@ -191,7 +191,7 @@ int main(void)
         assert(dvbridge_fel_submit(epoch,p) && !epoch->failed);
         reordered_base=NULL;
         if(gap)assert(!epoch->num_packets && epoch->recovering);
-        else assert(epoch->num_packets==1 && epoch->packet_order[0]==72);
+        else assert(epoch->num_packets==1 && epoch->packets[0].order==72);
         av_packet_free(&p);dvbridge_fel_destroy(epoch);
     }
     f=(struct dvbridge_fel){.eof=true,.recovering=true,.anchor_pts=AV_NOPTS_VALUE};
