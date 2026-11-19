@@ -82,10 +82,18 @@ struct direct_output {
     pl_tex texture;
     bool flip, custom_quantize, limited;
     unsigned bits;
+    const struct pl_color_space *sdr_target;
+    float sdr_gamma[3];
+    bool custom_gamma;
     struct reference_resolve quantize;
     struct pl_hook hook;
 };
 static struct pl_hook_res reference_quantize(void *priv, const struct pl_hook_params *p);
+static struct pl_hook_res sdr_gamma(void *priv,const struct pl_hook_params *p);
+static bool render_sdr_direct(struct dvbridge_renderer *r,
+    const struct dvbridge_policy *policy,const struct dvbridge_identity *id,
+    const struct pl_frame *source,const void *metadata,size_t bytes,double pts,double el_pts,
+    struct dvbridge_geometry geometry,pl_tex target,bool flip,bool limited,unsigned bits);
 
 #include "cb1_processing.h"
 
@@ -101,6 +109,7 @@ struct dvbridge_renderer {
     struct dvbridge_context *context;
     struct dvbridge_candidate *pending;
     bool ready, direct_output, overlay_visible;
+    bool sdr_reconstruction; /* Call-scoped: no DV transport candidate for SDR. */
     bool l2_trims_disabled;
     struct cb1_cmv40_options cmv40;
     enum cb1_cmv40_status cmv40_status;
@@ -148,6 +157,8 @@ struct dvbridge_renderer {
 };
 
 static void renderer_free(struct dvbridge_renderer *r);
+static bool ai_render_pixels(struct dvbridge_renderer *r,const struct pl_frame *source,
+    struct dvbridge_geometry g,pl_tex packed,bool flip,const struct dvbridge_native_overlay *overlay);
 static bool dve_requirements(pl_gpu gpu);
 static double dv_ideal_pq(double nits);
 static enum dvbridge_dv_policy_status dv_retire(struct dvbridge_renderer *r);
@@ -1178,6 +1189,7 @@ static bool render_picture(struct dvbridge_renderer *r, const struct pl_frame *s
         target.repr.bits.sample_depth=direct->bits;
         target.repr.bits.color_depth=direct->bits;
     }
+    if(direct && direct->sdr_target)target.color=*direct->sdr_target;
     struct pl_render_params params = pl_render_default_params;
     params.cb1_dovi_reference=master;
     params.cb1_fast_chroma = master ? p5_standard : true;
@@ -1417,7 +1429,7 @@ static bool render_picture(struct dvbridge_renderer *r, const struct pl_frame *s
     if(enhanced_reconstruction && r->enhanced_input)
         params.min_fbo_precision=r->enhanced_input->params.format->component_depth[0];
     params.cb1_exact_scaler_cache=mask.source_domain && r->exact_scaler_cache;
-    if(!session && !policy) {
+    if(!session && !policy && !r->sdr_reconstruction) {
         r->pending=prepare_picture_candidate(r,metadata,bytes,pts,geometry,
             paired && mapped.dovi.nlq_active,force_refresh,master!=NULL,source_transport,ipt!=NULL,
             !enhanced_reconstruction && r->l2_trims_disabled);
@@ -1507,6 +1519,7 @@ static bool render_picture(struct dvbridge_renderer *r, const struct pl_frame *s
             direct_hooks[count++]=&hook;
         }
         if(direct->custom_quantize)direct_hooks[count++]=&direct->hook;
+        if(direct->custom_gamma)direct_hooks[count++]=&direct->hook;
         params.hooks=direct_hooks;
         params.num_hooks=count;
     }
@@ -1878,9 +1891,9 @@ bool dvbridge_render_hdr10_policy_rgb(struct dvbridge_renderer *r,
     return true;
 }
 
-static bool direct_target_valid(struct dvbridge_renderer *r,pl_tex target,unsigned bits)
+static bool direct_target_valid_min(struct dvbridge_renderer *r,pl_tex target,unsigned bits,unsigned minimum)
 {
-    if(!r || !target || bits<10 || bits>16 || target==r->rgb ||
+    if(!r || !target || bits<minimum || bits>16 || target==r->rgb ||
        target->params.w<=0 || target->params.h<=0 || !target->params.renderable ||
        !target->params.format || target->params.format->num_components<3)return false;
     pl_fmt fmt=target->params.format;
@@ -1888,6 +1901,11 @@ static bool direct_target_valid(struct dvbridge_renderer *r,pl_tex target,unsign
         if(!((fmt->type==PL_FMT_UNORM && fmt->component_depth[c]>=(int)bits) ||
              (fmt->type==PL_FMT_FLOAT && fmt->component_depth[c]>=32)))return false;
     return true;
+}
+
+static bool direct_target_valid(struct dvbridge_renderer *r,pl_tex target,unsigned bits)
+{
+    return direct_target_valid_min(r,target,bits,10);
 }
 
 static bool direct_geometry_valid(struct dvbridge_geometry geometry)
@@ -1930,6 +1948,9 @@ bool dvbridge_render_hdr10_policy_direct(struct dvbridge_renderer *r,
     struct dvbridge_geometry geometry,pl_tex target,bool flip,bool limited,unsigned bits)
 {
     dvbridge_render_policy_cancel(r);
+    if(policy && policy->mode==DVBRIDGE_MODE_SDR)
+        return render_sdr_direct(r,policy,identity,source,metadata,bytes,pts,el_pts,
+            geometry,target,flip,limited,bits);
     if(!r || !identity || !policy ||
        policy->mode!=DVBRIDGE_MODE_HDR10_EXPERT ||
        identity->revision!=policy->revision || !isfinite(pts) || !source ||
@@ -2018,6 +2039,150 @@ bool dvbridge_render_policy_committed(const struct dvbridge_renderer *r,
 {
     if (!r || !snapshot || !r->policy_has_committed) return false;
     *snapshot=r->policy_committed; return true;
+}
+
+bool dvbridge_render_sdr_policy_rgb(struct dvbridge_renderer *r,
+    const struct dvbridge_policy *policy,const struct dvbridge_identity *id,
+    const struct pl_frame *source,const void *metadata,size_t bytes,
+    double pts,double el_pts,struct dvbridge_geometry geometry)
+{
+    dvbridge_render_policy_cancel(r);
+    if(r && r->dv.active)return false; /* Poll the existing retirement owner before reuse. */
+    if(r){r->l2_trims_disabled=false;dvbridge_renderer_set_cmv40(r,NULL);r->cmv40_status=CB1_CMV40_OFF;}
+    double peak,gamma,black;
+    if(!r || !policy || policy->mode!=DVBRIDGE_MODE_SDR || !id ||
+       id->revision!=policy->revision || dvbridge_policy_validate(policy)!=DVBRIDGE_POLICY_VALID ||
+       !dvbridge_sdr_target(&policy->sdr,&peak,&gamma,&black) || !source ||
+       source->num_overlays || source->rotation || !isfinite(pts) || !isfinite(el_pts) ||
+       (source->enhancement_layer && (pts!=el_pts || source->enhancement_layer->num_overlays)))return false;
+    bool fel=false;
+    if(metadata || bytes){
+        struct dvbridge_color mapped;
+        if(!metadata || !bytes || !dvbridge_map_color(&mapped,metadata,bytes,
+            source->enhancement_layer && pts==el_pts))return false;
+        fel=source->enhancement_layer && mapped.dovi.nlq_active;
+        r->sdr_reconstruction=true;
+        bool ok=dvbridge_render_rgb(r,source,metadata,bytes,pts,el_pts,geometry);
+        r->sdr_reconstruction=false;
+        if(!ok)return false;
+    }else{
+        const struct pl_hdr_metadata *hdr=&source->color.hdr;
+        const float luminance[]={hdr->min_luma,hdr->max_luma,hdr->max_cll,hdr->max_fall,
+            hdr->scene_max[0],hdr->scene_max[1],hdr->scene_max[2],hdr->scene_avg};
+        for(unsigned i=0;i<sizeof(luminance)/sizeof(*luminance);i++)
+            if(!isfinite(luminance[i]) || luminance[i]<0 || luminance[i]>10000)return false;
+        if((hdr->max_luma && hdr->min_luma>hdr->max_luma) ||
+           !isfinite(hdr->max_pq_y) || !isfinite(hdr->avg_pq_y) || hdr->max_pq_y<0 ||
+           hdr->max_pq_y>1 || hdr->avg_pq_y<0 || hdr->avg_pq_y>hdr->max_pq_y)return false;
+        if(source->enhancement_layer || source->repr.dovi || source->profile.len || source->icc || source->lut ||
+           source->color.transfer!=PL_COLOR_TRC_PQ || source->color.primaries!=PL_COLOR_PRIM_BT_2020 ||
+           source->num_planes<1 || source->num_planes>4 || !configure_target(r,geometry) || !ensure_rgb(r))return false;
+        for(int i=0;i<source->num_planes;i++)if(!source->planes[i].texture)return false;
+        if(!ai_render_pixels(r,source,geometry,NULL,false,NULL))return false;
+    }
+    struct pl_color_space target={.primaries=PL_COLOR_PRIM_BT_709,
+        .transfer=gamma==2.2?PL_COLOR_TRC_GAMMA22:PL_COLOR_TRC_GAMMA24,
+        .hdr={.min_luma=fmax(black,PL_COLOR_HDR_BLACK),.max_luma=peak}};
+    r->policy_pending=(struct dvbridge_hdr10_policy_output){.identity=*id,.policy=*policy,
+        .nominal_target=target,.container=target,.geometry=geometry,.fel_reconstructed=fel};
+    r->policy_ready=r->ready=true;return true;
+}
+
+static struct pl_hook_res sdr_gamma(void *priv,const struct pl_hook_params *p)
+{
+    const struct pl_shader_var var={.var=pl_var_vec3("sdr_gamma_range"),.data=priv,.dynamic=true};
+    bool ok=pl_shader_custom(p->sh,&(struct pl_custom_shader){.input=PL_SHADER_SIG_COLOR,
+        .output=PL_SHADER_SIG_COLOR,.variables=&var,.num_variables=1,
+        .body="color.rgb=sdr_gamma_range.y+sdr_gamma_range.z*pow(max((color.rgb-sdr_gamma_range.y)/sdr_gamma_range.z,vec3(0)),vec3(sdr_gamma_range.x));"});
+    return (struct pl_hook_res){.failed=!ok,.output=PL_HOOK_SIG_NONE};
+}
+
+/* Private Phase A. Eligibility is decided before drawing; failure after the
+ * draw starts remains a failed picture, never an implicit staged retry. */
+static bool render_sdr_direct(struct dvbridge_renderer *r,
+    const struct dvbridge_policy *policy,const struct dvbridge_identity *id,
+    const struct pl_frame *source,const void *metadata,size_t bytes,double pts,double el_pts,
+    struct dvbridge_geometry geometry,pl_tex target,bool flip,bool limited,unsigned bits)
+{
+    double peak,gamma,black;float crop[4];unsigned margins[4];
+    if(!r || r->dv.active || !id || id->revision!=policy->revision ||
+       dvbridge_policy_validate(policy)!=DVBRIDGE_POLICY_VALID ||
+       !dvbridge_sdr_target(&policy->sdr,&peak,&gamma,&black) || !source ||
+       source->rotation || source->num_overlays || source->repr.alpha!=PL_ALPHA_NONE ||
+       source->profile.len || source->icc || source->lut || !isfinite(pts) || !isfinite(el_pts) ||
+       !metadata || !bytes || !direct_geometry_valid(geometry) ||
+       geometry.source_width!=geometry.width || geometry.source_height!=geometry.height ||
+       !dvbridge_geometry_source(geometry,crop) || crop[0] || crop[1] ||
+       crop[2]!=geometry.source_width || crop[3]!=geometry.source_height ||
+       !dvbridge_frame_area(margins,metadata,bytes,geometry) ||
+       margins[0] || margins[1] || margins[2] || margins[3] ||
+       !direct_target_valid_min(r,target,bits,8))return false;
+    const struct pl_frame *el=source->enhancement_layer;
+    if(el && (pts!=el_pts || el->num_overlays || el->repr.alpha!=PL_ALPHA_NONE))return false;
+    if(source->num_planes<1 || source->num_planes>4 || (el && (el->num_planes<1 || el->num_planes>4)))return false;
+    for(int i=0;i<source->num_planes;i++)if(source->planes[i].texture==target)return false;
+    if(el)for(int i=0;i<el->num_planes;i++)if(el->planes[i].texture==target)return false;
+    struct dvbridge_color mapped;
+    if(!dvbridge_map_color(&mapped,metadata,bytes,el!=NULL))return false;
+    struct pl_color_space container={.primaries=PL_COLOR_PRIM_BT_709,
+        .transfer=gamma==2.2?PL_COLOR_TRC_GAMMA22:PL_COLOR_TRC_GAMMA24,
+        .hdr={.min_luma=fmax(black,PL_COLOR_HDR_BLACK),.max_luma=peak}};
+    struct direct_output direct;
+    direct_target_init(&direct,target,flip,limited,bits,false);
+    direct.sdr_target=&container;
+    direct.custom_gamma=gamma!=2.2 && gamma!=2.4;
+    direct.sdr_gamma[0]=2.4/gamma;
+    direct.sdr_gamma[1]=limited?16.*(1u<<(bits-8))/((1u<<bits)-1):0;
+    direct.sdr_gamma[2]=limited?219.*(1u<<(bits-8))/((1u<<bits)-1):1;
+    direct.hook=(struct pl_hook){.stages=PL_HOOK_OUTPUT,.input=PL_HOOK_SIG_COLOR,
+        .priv=direct.sdr_gamma,.hook=sdr_gamma,.signature=0x4342315344520001ULL};
+    r->l2_trims_disabled=false;dvbridge_renderer_set_cmv40(r,NULL);r->cmv40_status=CB1_CMV40_OFF;
+    r->sdr_reconstruction=true;
+    bool ok=render(r,source,metadata,bytes,pts,el_pts,geometry,NULL,false,
+        NULL,NULL,NULL,false,&direct,false,NULL,false,NULL);
+    r->sdr_reconstruction=false;
+    if(!ok)return false;
+    r->policy_pending=(struct dvbridge_hdr10_policy_output){.identity=*id,.policy=*policy,
+        .nominal_target=container,.container=container,.geometry=geometry,
+        .fel_reconstructed=el && mapped.dovi.nlq_active,.resolved=true,.final_target=target};
+    r->policy_ready=r->ready=true;
+    return true;
+}
+
+bool dvbridge_render_sdr_policy_resolve(struct dvbridge_renderer *r,pl_tex output,
+    bool flip,bool limited,unsigned bits)
+{
+    if(!r || !r->policy_ready || !r->ready || r->policy_pending.policy.mode!=DVBRIDGE_MODE_SDR ||
+       !r->rgb || !output || output==r->rgb || bits<8 || bits>16 || !output->params.renderable ||
+       !output->params.format || output->params.format->num_components<3 ||
+       output->params.w!=r->rgb->params.w || output->params.h!=r->rgb->params.h){
+        dvbridge_render_policy_cancel(r);return false;
+    }
+    for(int c=0;c<3;c++)if(output->params.format->component_depth[c]<(int)bits){
+        dvbridge_render_policy_cancel(r);return false;
+    }
+    struct pl_frame source={.num_planes=1,
+        .planes={{.texture=r->rgb,.components=4,.component_mapping={0,1,2,3}}},
+        .repr=pl_color_repr_rgb,.color=r->reconstructed_color};
+    struct pl_frame target=source;target.planes[0].texture=output;target.planes[0].flipped=flip;
+    target.color=r->policy_pending.container;
+    target.repr.levels=limited?PL_COLOR_LEVELS_LIMITED:PL_COLOR_LEVELS_FULL;
+    target.repr.bits.sample_depth=target.repr.bits.color_depth=bits;
+    double peak,gamma,black;
+    dvbridge_sdr_target(&r->policy_pending.policy.sdr,&peak,&gamma,&black);
+    float ratio[3]={2.4/gamma,limited?16.*(1u<<(bits-8))/((1u<<bits)-1):0,
+        limited?219.*(1u<<(bits-8))/((1u<<bits)-1):1};
+    const struct pl_hook hook={.stages=PL_HOOK_OUTPUT,.input=PL_HOOK_SIG_COLOR,
+        .priv=ratio,.hook=sdr_gamma,.signature=0x4342315344520001ULL};
+    const struct pl_hook *hooks[]={&hook};
+    struct pl_render_params params=pl_render_default_params;
+    params.min_fbo_precision=32;params.peak_detect_params=NULL;params.frame_mixer=NULL;
+    params.dither_params=&pl_dither_default_params;params.skip_caching_single_frame=true;
+    if(gamma!=2.2 && gamma!=2.4){params.hooks=hooks;params.num_hooks=1;}
+    bool ok=pl_render_image(r->renderer,&source,&target,&params);
+    struct pl_render_errors errors=pl_renderer_get_errors(r->renderer);
+    if(!ok || errors.errors || errors.num_disabled_hooks){dvbridge_render_policy_cancel(r);return false;}
+    r->policy_pending.resolved=true;r->policy_pending.final_target=output;return true;
 }
 
 
@@ -3540,6 +3705,10 @@ static bool ai_render_pixels(struct dvbridge_renderer *r,
         .planes={{.texture=packed?packed:direct?r->dv.ai_direct_target:prepack?r->ai_enhanced_packed:rgb,
             .flipped=(packed || direct) && flip,.components=4,.component_mapping={0,1,2,3}}},
         .repr=pl_color_repr_rgb,.color=source->color,.crop={g.x,g.y,g.x+g.width,g.y+g.height}};
+    if(source->color.transfer==PL_COLOR_TRC_HLG){
+        image.color=cb1_hlg_reference_color(PL_COLOR_TRC_HLG);
+        target.color=cb1_hlg_reference_color(PL_COLOR_TRC_PQ);
+    }
     int width,height;
     if(!dvbridge_geometry_raster(g,&width,&height))return false;
     if(packed || prepack || (!native && r->spatial_fit)){
@@ -3549,7 +3718,7 @@ static bool ai_render_pixels(struct dvbridge_renderer *r,
     }
     bool raw=false;
 #ifdef CB1_HAS_HDR10_AI
-    raw=packed && r->target_identity && !r->dv.active && !overlay &&
+    raw=source->color.transfer==PL_COLOR_TRC_PQ && packed && r->target_identity && !r->dv.active && !overlay &&
         g.source_width==3840 && g.source_height==2160 && !g.x && !g.y && g.width==3840 && g.height==2160 &&
         source->crop.x0==0 && source->crop.y0==0 &&
         cb1_hdr10_ingress_validate(source)==CB1_AI_READY &&
@@ -3570,8 +3739,9 @@ static bool ai_render_pixels(struct dvbridge_renderer *r,
             .w=g.source_width,.h=g.source_height,.format=fmt,.sampleable=true,.renderable=true)))return false;
         struct pl_frame decoded={.num_planes=1,
             .planes={{.texture=r->native_picture,.components=4,.component_mapping={0,1,2,3}}},
-            .repr=pl_color_repr_rgb,.color=source->color,.crop={0,0,g.source_width,g.source_height}};
+            .repr=pl_color_repr_rgb,.color=target.color,.crop={0,0,g.source_width,g.source_height}};
         struct pl_frame full_source=*source;
+        full_source.color=image.color;
         full_source.crop=(pl_rect2df){0,0,g.source_width,g.source_height};
         if(!pl_render_image(r->renderer,&full_source,&decoded,&params))return false;
         image=decoded;
@@ -3620,7 +3790,7 @@ static bool ai_render_pixels(struct dvbridge_renderer *r,
         ok=ok && glGetError()==GL_NO_ERROR;
     }
     if(!ok)return false;
-    r->reconstructed_color=source->color;
+    r->reconstructed_color=target.color;
     r->dv.output.intermediate=packed?NULL:rgb;
     r->dv.final_fitted=!native;
     r->ready=true;return true;
@@ -3745,6 +3915,13 @@ static pl_tex render_hdr10_ai(struct dvbridge_renderer *r,const struct dvbridge_
     const struct cb1_ai_result *prediction,const struct pl_frame *source,const struct dvbridge_geometry *geometry,
     pl_tex packed,bool flip,const struct dvbridge_native_overlay *overlay)
 {
+    struct pl_frame hlg;
+    const bool original_hlg=source && source->color.transfer==PL_COLOR_TRC_HLG;
+    if(original_hlg){
+        if(!policy || policy->mode!=DVBRIDGE_MODE_STANDARD || source->repr.dovi ||
+           source->enhancement_layer || source->color.primaries!=PL_COLOR_PRIM_BT_2020)return NULL;
+        hlg=*source;hlg.color=cb1_hlg_reference_color(PL_COLOR_TRC_HLG);source=&hlg;
+    }
     if(r){r->l2_trims_disabled=false;dvbridge_renderer_set_cmv40(r,NULL);r->cmv40_status=CB1_CMV40_OFF;}
     if(!r || !geometry)return NULL;
     if(r->dv.active){dvbridge_render_dv_policy_cancel(r);return NULL;}
@@ -3758,7 +3935,7 @@ static pl_tex render_hdr10_ai(struct dvbridge_renderer *r,const struct dvbridge_
        source->rotation || source->num_overlays ||
        source->profile.len || source->icc || source->lut || source->enhancement_layer || source->repr.dovi ||
        (source->repr.sys!=PL_COLOR_SYSTEM_RGB && source->repr.sys!=PL_COLOR_SYSTEM_BT_2020_NC) ||
-       source->color.transfer!=PL_COLOR_TRC_PQ ||
+       (source->color.transfer!=PL_COLOR_TRC_PQ && !original_hlg) ||
        source->color.primaries!=PL_COLOR_PRIM_BT_2020 || source->num_planes<1 || source->num_planes>4 ||
        !isfinite(source->color.hdr.max_luma) || !isfinite(source->color.hdr.min_luma) ||
        !isfinite(source->color.hdr.max_cll) || !isfinite(source->color.hdr.max_fall) ||
@@ -3774,7 +3951,8 @@ static pl_tex render_hdr10_ai(struct dvbridge_renderer *r,const struct dvbridge_
        ((!g.crop[2] && !g.crop[3]) && ((g.x&1) || (g.width&1) ||
         fabs((double)g.width*g.source_height/g.source_width-g.height)>1.01)))return NULL;
     unsigned margins[4]={g.x,r->target_width-g.x-g.width,g.y,r->target_height-g.y-g.height};size_t bytes;
-    AVDOVIMetadata *metadata=ai_output_metadata(prediction,&source->color,margins,&bytes);if(!metadata)return NULL;
+    const struct pl_color_space normalized_color=original_hlg?cb1_hlg_reference_color(PL_COLOR_TRC_PQ):source->color;
+    AVDOVIMetadata *metadata=ai_output_metadata(prediction,&normalized_color,margins,&bytes);if(!metadata)return NULL;
     struct cb1_dv_enhanced_plan identity_plan;
     if(identity && (!ai_enhanced_plan(&identity_plan,metadata,bytes,prediction,&source->color,policy) ||
         identity_plan.status!=CB1_DVE_IDENTITY || identity_plan.reason!=CB1_DVE_NO_HEADROOM)){
@@ -3795,8 +3973,8 @@ static pl_tex render_hdr10_ai(struct dvbridge_renderer *r,const struct dvbridge_
     s->output.value=(struct dvbridge_dv_policy_snapshot){
         .identity={prediction->id.stream,prediction->id.picture,prediction->id.revision},.policy=*policy,
         .source_cm_version=0,.output_generation=DVBRIDGE_ETSI_LEGACY_LITERAL,.geometry=g,
-        .container=r->reconstructed_color,.nominal_target=source->color,
-        .nominal_max_nits=source->color.hdr.max_luma};
+        .container=r->reconstructed_color,.nominal_target=normalized_color,
+        .nominal_max_nits=normalized_color.hdr.max_luma};
     s->output.value.source_pq[0]=av_dovi_get_color(metadata)->source_min_pq;
     s->output.value.source_pq[1]=av_dovi_get_color(metadata)->source_max_pq;
     if(identity){
