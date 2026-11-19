@@ -1,7 +1,6 @@
 # Algorithms and metadata
 
-This reference describes **CB1 0.5 in the published R1.0.0 RC3 release** and the circuits listed in
-[CIRCUITS.md](CIRCUITS.md). Equations describe the implemented processing
+This reference describes the CB1 processing contracts listed in [CIRCUITS.md](CIRCUITS.md). Equations describe the implemented processing
 contract, not a certified reproduction of Dolby's proprietary display mapper.
 
 ## Pipeline and ownership
@@ -58,7 +57,7 @@ display peak or an output brightness cap.
 | RPU reconstruction data | Reconstruct source pixels | Reconstruct before conversion | Same reconstruction as Reference |
 | L1 min/max/average | Transport | Maximum/average guide scene mapping; minimum validated and retained | Guide expansion; transform authored scene descriptors through the applied curve |
 | L3 offsets | Transport | Retained, not executed | Fold once; emit neutral offsets when the block is present |
-| L2 CM2.9 trims | Transport | HDR10 Rendering Reference applies compatible primary controls | Guide luminance retention and color protection |
+| L2 CM2.9 trims | Transport | LLDV Reference – HDR10 Output applies compatible primary controls | Guide luminance retention and color protection |
 | L5 active area | Transport and mask borders | Preserve active-area geometry | Output geometry; full-raster signalling while overlays are visible |
 | L6 HDR mastering | Transport | Source reference and static HDR descriptors | Retained if present; not relabelled as measured output |
 | L8 CM4 trims | Transport | Retained; available L2 compatibility only | Guide luminance retention and color protection |
@@ -76,6 +75,8 @@ still preserves the source image/metadata pair; missing optional creative trims
 alone does not disable reconstruction or expansion.
 
 ## Dolby Vision Reference
+
+**Purpose.** Play Dolby Vision on a TV-led display with full applicable FEL reconstruction and less GPU work than Master Reference.
 
 BL samples are reshaped using the RPU's piecewise polynomial or MMR mapping.
 For applicable Profile 7 FEL, the timestamp-matched EL contributes the decoded
@@ -98,6 +99,8 @@ The TV performs final TV-Led display mapping.
 
 ## Dolby Vision to HDR10 Rendering
 
+**Purpose.** Play Dolby Vision on an HDR10 display. Reconstruct the source and adapt its brightness using the mastering information and scene metadata.
+
 HDR10 Rendering reconstructs the source, then uses libplacebo's spline tone mapper and
 perceptual gamut mapper. Valid L1 maximum/average values guide scene processing;
 otherwise the mapper uses static HDR descriptors. The reference derives from
@@ -118,7 +121,9 @@ Source MaxCLL/MaxFALL are not relabeled as measured output statistics.
 
 These are rendering coefficients, not user calibration measurements.
 
-## Dolby Vision to HDR10 Rendering Reference
+## Dolby Vision to LLDV Reference – HDR10 Output
+
+**Purpose.** Render Dolby Vision for a manually calibrated HDR10 screen using its configured peak, black level and gamut.
 
 The frame-owned plan binds reconstruction, source descriptors, explicit tone
 mapping, target gamut, compatible L2 controls and HDR10 signaling. Required FEL
@@ -173,6 +178,8 @@ a claim of certified LLDV equivalence. The published RC3 implementation is in
 `src/cb1_hdr10_expert.c` and the matched libplacebo tone-LUT patch.
 
 ## Authored Dolby Vision Adaptive HDR Mapping
+
+**Purpose.** Give Dolby Vision highlights and selected midtones more room on the configured display while keeping source metadata involved in the mapping.
 
 `cb1-dve-pixel-v1` processes reconstructed linear BT.2020 pixels, then updates
 scene L1/L5. Kodi and the engine expose one Adaptive HDR Mapping mode.
@@ -394,6 +401,8 @@ Simple exposure changes retain their measured peaks and are not scene cuts.
 
 ### Reference output
 
+**Purpose.** Convert HDR10 to TV-led Dolby Vision by estimating scene metadata for the original grade.
+
 HDR10 pixels retain their source color interpretation without an enhancement
 grade. Conversion and quantization into the DV transport still occur; source
 storage is not promised bit-identical. Generated L1/L3 and active-area metadata
@@ -401,6 +410,8 @@ accompany the frame. This is an AI-assisted DV representation of HDR10, not a
 recovered studio DV grade or an established improvement on every display.
 
 ### Adaptive HDR Mapping output
+
+**Purpose.** Convert HDR10 to TV-led Dolby Vision and expand eligible highlights for the configured display.
 
 HDR10 AI Adaptive HDR Mapping shares the authored-DV pixel expansion, dense LMS/PQ output
 analysis and temporal transaction. Input guidance uses the reconstructed L1
