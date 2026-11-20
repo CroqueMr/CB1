@@ -101,8 +101,9 @@ static void envelope_oracle(pl_gpu gpu,pl_dispatch dp,bool colour)
             .prim=*pl_raw_primaries_get(PL_COLOR_PRIM_BT_2020)}};
     size_t bytes;AVDOVIMetadata *m=task3_fixture(&bytes);
     av_dovi_get_color(m)->source_max_pq=lround(maximum*4095);
-    struct pl_color_repr repr;struct pl_dovi_metadata dovi;
-    struct pl_color_space decoded;
+    struct pl_color_repr repr = {0};
+    struct pl_dovi_metadata dovi = {0};
+    struct pl_color_space decoded = {0};
 #ifdef PL_HAVE_CB1_NORMALIZED_DOVI
     pl_cb1_map_avdovi_metadata(&decoded,&repr,&dovi,m);
 #else
