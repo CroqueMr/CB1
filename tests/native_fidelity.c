@@ -40,7 +40,12 @@ static void chroma(struct reference_gpu *g)
 static float sample(struct reference_gpu *g, AVDOVIMetadata *m,
                     float input, float enhancement, bool native)
 {
-    struct pl_dovi_metadata d={0};pl_map_dovi_metadata(&d,m);
+    struct pl_dovi_metadata d = {0};
+#ifdef PL_HAVE_CB1_NORMALIZED_DOVI
+    pl_cb1_map_dovi_metadata(&d, m);
+#else
+    pl_map_dovi_metadata(&d, m);
+#endif
 #ifdef PL_HAVE_CB1_NATIVE_BOUNDS
     d.cb1_native_bounds=native;
 #else

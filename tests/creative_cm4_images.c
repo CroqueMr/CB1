@@ -103,7 +103,11 @@ static void envelope_oracle(pl_gpu gpu,pl_dispatch dp,bool colour)
     av_dovi_get_color(m)->source_max_pq=lround(maximum*4095);
     struct pl_color_repr repr;struct pl_dovi_metadata dovi;
     struct pl_color_space decoded;
+#ifdef PL_HAVE_CB1_NORMALIZED_DOVI
+    pl_cb1_map_avdovi_metadata(&decoded,&repr,&dovi,m);
+#else
     pl_map_avdovi_metadata(&decoded,&repr,&dovi,m);
+#endif
     struct pl_color_map_params params={.gamut_mapping=&pl_gamut_map_clip,
         .tone_mapping_function=&pl_tone_map_spline,
         .tone_constants={.knee_adaptation=.4f,.knee_minimum=.1f,.knee_maximum=.8f,.knee_default=.4f,

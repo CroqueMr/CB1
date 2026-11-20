@@ -26,6 +26,9 @@ int main(void)
     for(unsigned stable=0;stable<2;stable++)for(unsigned order=1;order<=3;order++)
     for(unsigned mode=0;mode<8;mode++){
         struct pl_dovi_metadata d={0};
+#ifdef PL_HAVE_CB1_NORMALIZED_DOVI
+        d.cb1_normalized = true;
+#endif
         for(unsigned c=0;c<3;c++){
             d.nonlinear.m[c][c]=1;d.linear.m[c][c]=1;
             d.comp[c].num_pivots=2;d.comp[c].pivots[0]=.01f;d.comp[c].pivots[1]=.99f;
