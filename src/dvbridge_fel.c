@@ -815,6 +815,9 @@ static int take_source(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, boo
     }
     if (no_residual && presentable && !f->failed && !f->el_started && !f->synchronizing &&
         source >= f->anchor_pts) {
+        /* The current BL RPU proves that there is no residual. Keep every
+         * compressed EL still needed by a later FEL picture in this GOP. */
+        metadata_only = true;
         for (unsigned i = 0; i < f->num_packets; ++i)
             if (f->packets[i].order == source) {
                 const int type = vcl_type(f->packets[i].packet, f->enhancement_order.context);

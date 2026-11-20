@@ -94,6 +94,16 @@ int main(void)
         av_frame_free(&frame);
         assert(dvbridge_fel_drain(f, NULL));
         dvbridge_fel_reset(f);
+        // A prior EL anchor does not make an absent EL mandatory for a zero-residual RPU.
+        f->source_timed = true;
+        f->source_epoch = 4;
+        f->source_clock = (AVRational){1, 90000};
+        f->synchronizing = false;
+        f->anchor_pts = 500;
+        const struct dvbridge_fel_source mel = {501, AV_NOPTS_VALUE, {1, 90000}, 4, true};
+        assert(submit_source(f, NULL, &mel));
+        assert(take_source(f, 501, &frame, true) == 3 && !frame);
+        dvbridge_fel_reset(f);
         // A genuinely decoded leading picture is exact despite a later RAP PTS.
         f->source_timed=true;f->anchor_pts=100;f->num_times=1;
         f->times[0].order=99;f->times[0].pts=9000;f->times[0].presentable=true;
