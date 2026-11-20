@@ -114,7 +114,11 @@ bool dvbridge_map_color(struct dvbridge_color *out, const void *metadata,
         if (!color->ycc_to_rgb_matrix[i].den || !color->rgb_to_lms_matrix[i].den)
             return false;
     struct dvbridge_color candidate = {0};
+#ifdef PL_HAVE_CB1_NORMALIZED_DOVI
+    pl_cb1_map_avdovi_metadata(&candidate.color, &candidate.repr, &candidate.dovi, m);
+#else
     pl_map_avdovi_metadata(&candidate.color, &candidate.repr, &candidate.dovi, m);
+#endif
     if (candidate.dovi.nlq_active && !enhancement_layer_paired)
         return false;
     *out = candidate;
