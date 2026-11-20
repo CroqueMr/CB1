@@ -121,6 +121,8 @@ enum cb1_ai_status cb1_hdr10_ingress_rgb(struct cb1_hdr10_ingress *ctx,
             .color=cb1_hlg_reference_color(PL_COLOR_TRC_PQ)};
         struct pl_render_params params=pl_render_default_params;
         params.min_fbo_precision=32;params.peak_detect_params=NULL;params.dither_params=NULL;
+        // Match the chroma sampling used by the Dolby Vision output path.
+        params.cb1_fast_chroma=true;
         params.frame_mixer=NULL;params.skip_caching_single_frame=true;
         if(!pl_render_image(ctx->renderer,&image,&target,&params))return CB1_AI_INVALID;
         *out=ctx->texture;return CB1_AI_READY;
