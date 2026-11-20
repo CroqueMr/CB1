@@ -836,6 +836,11 @@ static int take_source(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, boo
     else if (take_ready(f, source, frame)) {
         (*frame)->pts = (*frame)->best_effort_timestamp = pts;
         result = 1;
+    } else if (no_residual && f->el_started && !f->failed && !f->synchronizing &&
+               f->anchor_pts != AV_NOPTS_VALUE && source >= f->anchor_pts) {
+        /* Pump the enhancement decoder even when this particular BL needs
+         * no residual, so the next FEL picture still has its references. */
+        result = 3;
     } else if (f->failed || (f->eof && !f->recovering) ||
                (f->output_order != AV_NOPTS_VALUE && source < f->output_order))
     {

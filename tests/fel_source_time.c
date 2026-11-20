@@ -103,6 +103,10 @@ int main(void)
         const struct dvbridge_fel_source mel = {501, AV_NOPTS_VALUE, {1, 90000}, 4, true};
         assert(submit_source(f, NULL, &mel));
         assert(take_source(f, 501, &frame, true) == 3 && !frame);
+        f->el_started = true;
+        const struct dvbridge_fel_source later_mel = {502, AV_NOPTS_VALUE, {1, 90000}, 4, true};
+        assert(submit_source(f, NULL, &later_mel));
+        assert(take_source(f, 502, &frame, true) == 3 && !frame);
         dvbridge_fel_reset(f);
         // A genuinely decoded leading picture is exact despite a later RAP PTS.
         f->source_timed=true;f->anchor_pts=100;f->num_times=1;
