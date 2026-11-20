@@ -7,6 +7,10 @@
 struct dvbridge_fel;
 /* Single decoder-thread owner. Returned frames retain their hardware surface. */
 struct dvbridge_fel *dvbridge_fel_create(const AVCodecParameters *parameters, AVRational time_base);
+/* Declared tracks provide their own codec parameters; only interleaved input uses a splitter. */
+struct dvbridge_fel *dvbridge_fel_create_layers(const AVCodecParameters *base,
+                                               const AVCodecParameters *enhancement,
+                                               AVRational time_base);
 void dvbridge_fel_destroy(struct dvbridge_fel *fel);
 void dvbridge_fel_reset(struct dvbridge_fel *fel);
 bool dvbridge_fel_device(struct dvbridge_fel *fel, AVBufferRef *device);
@@ -20,7 +24,8 @@ struct dvbridge_fel_source {
     uint64_t epoch;
     bool presentable;
 };
-bool dvbridge_fel_submit_source(struct dvbridge_fel *fel, const AVPacket *packet,
+/* The optional enhancement is its own normalized HEVC access unit. */
+bool dvbridge_fel_submit_layers(struct dvbridge_fel *fel, const AVPacket *enhancement,
                                const struct dvbridge_fel_source *source);
 /* Optional reason is set only when the final drain identifies a specific fault. */
 bool dvbridge_fel_drain(struct dvbridge_fel *fel, const char **reason);
