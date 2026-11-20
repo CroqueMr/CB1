@@ -28,7 +28,7 @@ struct picture_order {
 
 /* dovi_split preserves the EL configuration's NAL framing, independently
  * of the BL input. Inspect the first VCL header in the declared format. */
-static int vcl_type(const AVPacket *packet, const AVCodecParameters *parameters)
+static int vcl_type(const AVPacket *packet, const AVCodecContext *parameters)
 {
     if (parameters->extradata_size >= 23 && parameters->extradata[0] == 1) {
         const int length_size = (parameters->extradata[21] & 3) + 1;
@@ -250,7 +250,8 @@ void dvbridge_fel_destroy(struct dvbridge_fel *f)
     free(f);
 }
 
-struct dvbridge_fel *dvbridge_fel_create(const AVCodecParameters *p, AVRational time_base)
+struct dvbridge_fel *dvbridge_fel_create_layers(const AVCodecParameters *p,
+                                               const AVCodecParameters *layer, AVRational time_base)
 {
     if (!p || p->codec_id != AV_CODEC_ID_HEVC || time_base.num <= 0 || time_base.den <= 0)
         return NULL;
@@ -264,21 +265,24 @@ struct dvbridge_fel *dvbridge_fel_create(const AVCodecParameters *p, AVRational 
     f->anchor_pts = AV_NOPTS_VALUE;
     f->output_order = AV_NOPTS_VALUE;
     f->source_taken = AV_NOPTS_VALUE;
-    if (av_bsf_list_parse_str("dovi_split=mode=el", &f->split) < 0 ||
-        avcodec_parameters_copy(f->split->par_in, p) < 0)
-        goto fail;
-    f->split->time_base_in = time_base;
-    if (av_bsf_init(f->split) < 0)
-        goto fail;
+    if (!layer) {
+        if (av_bsf_list_parse_str("dovi_split=mode=el", &f->split) < 0 ||
+            avcodec_parameters_copy(f->split->par_in, p) < 0)
+            goto fail;
+        f->split->time_base_in = time_base;
+        if (av_bsf_init(f->split) < 0)
+            goto fail;
+        layer = f->split->par_out;
+    }
     f->decoder = avcodec_alloc_context3(codec);
-    if (!f->decoder || avcodec_parameters_to_context(f->decoder, f->split->par_out) < 0)
+    if (!f->decoder || avcodec_parameters_to_context(f->decoder, layer) < 0)
         goto fail;
     f->decoder->pkt_timebase = time_base;
     f->decoder->get_format = hardware_format;
     f->decoder->thread_count = 1;
     f->decoder->err_recognition |= AV_EF_EXPLODE;
     struct picture_order *orders[] = {&f->base_order, &f->enhancement_order};
-    const AVCodecParameters *parameters[] = {p, f->split->par_out};
+    const AVCodecParameters *parameters[] = {p, layer};
     for (unsigned i = 0; i < 2; ++i) {
         orders[i]->parser = av_parser_init(AV_CODEC_ID_HEVC);
         orders[i]->context = avcodec_alloc_context3(NULL);
@@ -291,6 +295,11 @@ struct dvbridge_fel *dvbridge_fel_create(const AVCodecParameters *p, AVRational 
 fail:
     dvbridge_fel_destroy(f);
     return NULL;
+}
+
+struct dvbridge_fel *dvbridge_fel_create(const AVCodecParameters *p, AVRational time_base)
+{
+    return dvbridge_fel_create_layers(p, NULL, time_base);
 }
 
 /* Continuous recovery preserves parser history and ready exact pairs. */
@@ -422,10 +431,10 @@ static bool pump(struct dvbridge_fel *f)
             !f->times[match].key && f->base_order.context->has_b_frames > 0) {
             av_log(f->decoder, AV_LOG_ERROR,
                    "FEL decode: ambiguous enhancement epoch at picture %lld (EL NAL type %d); refusing an unproven pair\n",
-                   (long long)f->packets[0].order, vcl_type(packet, f->split->par_out));
+                   (long long)f->packets[0].order, vcl_type(packet, f->enhancement_order.context));
             goto fail;
         }
-        const int type=f->source_timed ? vcl_type(packet, f->split->par_out) : -1;
+        const int type=f->source_timed ? vcl_type(packet, f->enhancement_order.context) : -1;
         if (f->recovering || (f->source_timed && f->source_no_rasl && (type==8 || type==9))) {
             if (!f->source_timed && f->packets[0].access && match == f->num_times && !f->draining)
                 break; /* Independent EL IDR can precede the matching BL key. */
@@ -551,47 +560,98 @@ bool dvbridge_fel_device(struct dvbridge_fel *f, AVBufferRef *device)
 }
 
 
-static bool submit(struct dvbridge_fel *f, const AVPacket *packet,
-                   const struct dvbridge_fel_source *source)
+static bool remember_base(struct dvbridge_fel *f, int64_t identity, int64_t pts,
+                          bool presentable)
 {
-    if (!f || !packet || f->failed || f->draining || packet->size <= 0 ||
-        (packet->pts == AV_NOPTS_VALUE && (!source || source->base_pts != AV_NOPTS_VALUE)))
-        return false;
-    if (source) {
-        if ((source->base_pts == AV_NOPTS_VALUE && source->enhancement_pts == AV_NOPTS_VALUE) ||
-            source->time_base.num <= 0 ||
-            source->time_base.den <= 0 || !source->epoch ||
-            (!f->source_timed && f->base_order.seen) ||
-            (source->base_pts != AV_NOPTS_VALUE && source->base_pts <= f->source_taken) ||
-            (f->source_epoch && (source->epoch != f->source_epoch ||
-                                av_cmp_q(source->time_base, f->source_clock))))
-            goto fail;
-        f->source_timed = true;
-        f->source_epoch = source->epoch;
-        f->source_clock = source->time_base;
-        f->decoder->pkt_timebase = source->time_base;
-    } else if (f->source_timed) goto fail;
-    int64_t base_identity = source ? source->base_pts : 0;
-    if (!source || source->base_pts != AV_NOPTS_VALUE) {
-        if (!source && !picture_identity(&f->base_order, packet, &base_identity))
-            goto fail;
-        unsigned match=f->num_times;
-        for (unsigned i=0;i<f->num_times;++i) {
-            if (source && f->times[i].pts == packet->pts) goto fail;
-            if (f->times[i].order != base_identity) continue;
-            if (!source || f->times[i].pts != AV_NOPTS_VALUE) goto fail;
-            match=i;
-        }
-        if (match==f->num_times) {
-            if (f->num_times==MAP_MAX) goto fail;
-            ++f->num_times;
-            f->times[match].presentable=true;
-        }
-        f->times[match].order=base_identity;
-        f->times[match].key=f->base_order.parser->key_frame==1;
-        f->times[match].presentable &= !source || source->presentable;
-        f->times[match].pts=packet->pts;
+    unsigned match = f->num_times;
+    for (unsigned i = 0; i < f->num_times; ++i) {
+        if (f->source_timed && f->times[i].pts == pts)
+            return false;
+        if (f->times[i].order != identity)
+            continue;
+        if (!f->source_timed || f->times[i].pts != AV_NOPTS_VALUE)
+            return false;
+        match = i;
     }
+    if (match == f->num_times) {
+        if (f->num_times == MAP_MAX)
+            return false;
+        ++f->num_times;
+        f->times[match].presentable = true;
+    }
+    f->times[match].order = identity;
+    f->times[match].key = f->base_order.parser->key_frame == 1;
+    f->times[match].presentable &= presentable;
+    f->times[match].pts = pts;
+    return true;
+}
+
+bool dvbridge_fel_submit_layers(struct dvbridge_fel *f, const AVPacket *enhancement,
+                               const struct dvbridge_fel_source *source)
+{
+    if (!f || f->split || !source || f->failed || f->draining)
+        return false;
+    if ((source->base_pts == AV_NOPTS_VALUE && source->enhancement_pts == AV_NOPTS_VALUE) ||
+        (!!enhancement != (source->enhancement_pts != AV_NOPTS_VALUE)) ||
+        source->time_base.num <= 0 || source->time_base.den <= 0 || !source->epoch ||
+        (!f->source_timed && f->base_order.seen) ||
+        (source->base_pts != AV_NOPTS_VALUE && source->base_pts <= f->source_taken) ||
+        (f->source_epoch && (source->epoch != f->source_epoch ||
+                            av_cmp_q(source->time_base, f->source_clock))))
+        goto fail;
+    f->source_timed = true;
+    f->source_epoch = source->epoch;
+    f->source_clock = source->time_base;
+    f->decoder->pkt_timebase = source->time_base;
+    if (source->base_pts != AV_NOPTS_VALUE &&
+        !remember_base(f, source->base_pts, source->base_pts, source->presentable))
+        goto fail;
+    if (!enhancement)
+        return true;
+
+    const unsigned limit = f->mel_deferred ? MEL_PACKET_MAX : QUEUE_MAX;
+    if (f->mel_deferred && !f->el_started &&
+        (f->num_packets >= limit || (size_t)enhancement->size > PACKET_BYTES_MAX - f->packet_bytes) &&
+        !pump(f))
+        goto fail;
+    int64_t picture;
+    if (f->num_packets >= limit || enhancement->size <= 0 ||
+        (size_t)enhancement->size > PACKET_BYTES_MAX - f->packet_bytes ||
+        !picture_identity(&f->enhancement_order, enhancement, &picture))
+        goto fail;
+    const bool key = f->enhancement_order.parser->key_frame == 1;
+    if (f->synchronizing) {
+        if (!key) {
+            if (!discard_source(f, source->enhancement_pts) || ++f->preroll_packets > 1024)
+                goto fail;
+            return true;
+        }
+        f->anchor_pts = source->enhancement_pts;
+        f->source_no_rasl = true;
+        f->synchronizing = false;
+    }
+    AVPacket *copy = av_packet_clone(enhancement);
+    if (!copy)
+        goto fail;
+    f->packet_bytes += copy->size;
+    f->packets[f->num_packets++] = (struct fel_packet){
+        .packet = copy, .order = source->enhancement_pts, .access = key ? FEL_KEY : FEL_NONKEY,
+    };
+    return true;
+fail:
+    f->failed = true;
+    return false;
+}
+
+bool dvbridge_fel_submit(struct dvbridge_fel *f, const AVPacket *packet)
+{
+    int64_t base_identity;
+    if (!f || !f->split || !packet || f->failed || f->draining || f->source_timed ||
+        packet->size <= 0 || packet->pts == AV_NOPTS_VALUE)
+        return false;
+    if (!picture_identity(&f->base_order, packet, &base_identity) ||
+        !remember_base(f, base_identity, packet->pts, true))
+        goto fail;
     AVPacket *copy = av_packet_clone(packet);
     if (!copy)
         goto fail;
@@ -607,66 +667,32 @@ static bool submit(struct dvbridge_fel *f, const AVPacket *packet,
         result = av_bsf_receive_packet(f->split, copy);
         if (result < 0) {
             av_packet_free(&copy);
-            if (result == AVERROR(EAGAIN)) {
-                if (source && !received_enhancement && source->enhancement_pts != AV_NOPTS_VALUE)
+            if (result != AVERROR(EAGAIN))
+                goto fail;
+            if (!received_enhancement)
+                f->epoch_uncertain = true;
+            if (f->synchronizing) {
+                f->num_times = 0;
+                if (++f->preroll_packets > 1024) {
+                    av_log(f->decoder, AV_LOG_ERROR,
+                           "FEL decode: no usable enhancement anchor after %u preroll packets (EL received: %s)\n",
+                           f->preroll_packets, f->enhancement_order.seen ? "yes" : "no");
                     goto fail;
-                if (!source && !received_enhancement)
-                    f->epoch_uncertain = true;
-                if (!source && f->synchronizing) {
-                    /* All EL from this AU has been examined. Before the
-                     * first accepted anchor these BL identities are preroll. */
-                    f->num_times = 0;
-                    if (++f->preroll_packets > 1024) {
-                        av_log(f->decoder, AV_LOG_ERROR,
-                               "FEL decode: no usable enhancement anchor after %u preroll packets (EL received: %s)\n",
-                               f->preroll_packets, f->enhancement_order.seen ? "yes" : "no");
-                        goto fail;
-                    }
                 }
-                return true; /* Submit EL when a decoded BL requests its matching picture. */
             }
+            return true;
+        }
+        if ((f->num_packets >= QUEUE_MAX || (size_t)copy->size > PACKET_BYTES_MAX - f->packet_bytes) &&
+            !pump(f)) {
+            av_packet_free(&copy);
             goto fail;
         }
-        const unsigned limit = f->mel_deferred ? MEL_PACKET_MAX : QUEUE_MAX;
-        /* A renewed base decoder may accept more input before returning a
-         * picture. Give queued EL a chance to decode before rejecting the AU. */
-        if ((!f->source_timed || (f->mel_deferred && !f->el_started)) &&
-            (f->num_packets >= limit || (size_t)copy->size > PACKET_BYTES_MAX - f->packet_bytes))
-            if (!pump(f)) {
-                av_packet_free(&copy);
-                goto fail;
-            }
         const int64_t previous_maximum = f->enhancement_order.maximum;
-        if (f->num_packets >= limit || copy->size <= 0 ||
+        if (f->num_packets >= QUEUE_MAX || copy->size <= 0 ||
             (size_t)copy->size > PACKET_BYTES_MAX - f->packet_bytes ||
             !picture_identity(&f->enhancement_order, copy, &f->packets[f->num_packets].order)) {
             av_packet_free(&copy);
             goto fail;
-        }
-        /* Present seek preroll is not a missing enhancement access unit. */
-        if (source) {
-            if (received_enhancement || source->enhancement_pts == AV_NOPTS_VALUE) {
-                av_packet_free(&copy);
-                goto fail;
-            }
-            received_enhancement = true;
-            f->packets[f->num_packets].order = source->enhancement_pts;
-            const bool key = f->enhancement_order.parser->key_frame == 1;
-            if (f->synchronizing) {
-                if (!key) {
-                    av_packet_free(&copy);
-                    if (!discard_source(f, source->enhancement_pts)) goto fail;
-                    if (++f->preroll_packets > 1024) goto fail;
-                    continue;
-                }
-                f->anchor_pts = source->enhancement_pts;
-                f->source_no_rasl = true;
-                f->synchronizing = false;
-            }
-            f->packets[f->num_packets].access = key ? FEL_KEY : FEL_NONKEY;
-            f->packet_bytes += copy->size;
-            f->packets[f->num_packets++].packet = copy;
-            continue;
         }
         received_enhancement = true;
         /* Reordered layers cannot corroborate an epoch with independent
@@ -713,7 +739,7 @@ static bool submit(struct dvbridge_fel *f, const AVPacket *packet,
          * the picture-order map, independently of this packet's decode order. */
         if (ep->key_frame == 1 && !common_key && ep->output_picture_number > 0 &&
             previous_maximum < INT64_MAX && f->packets[f->num_packets].order == previous_maximum + 1 &&
-            vcl_type(copy, f->split->par_out) == 21 /* CRA_NUT */)
+            vcl_type(copy, f->enhancement_order.context) == 21 /* CRA_NUT */)
             f->packets[f->num_packets].access = FEL_CONTINUOUS_CRA;
         f->packet_bytes += copy->size;
         f->packets[f->num_packets++].packet = copy;
@@ -721,17 +747,6 @@ static bool submit(struct dvbridge_fel *f, const AVPacket *packet,
 fail:
     f->failed = true;
     return false;
-}
-
-bool dvbridge_fel_submit(struct dvbridge_fel *f, const AVPacket *packet)
-{
-    return submit(f, packet, NULL);
-}
-
-bool dvbridge_fel_submit_source(struct dvbridge_fel *f, const AVPacket *packet,
-                               const struct dvbridge_fel_source *source)
-{
-    return source && submit(f, packet, source);
 }
 
 bool dvbridge_fel_drain(struct dvbridge_fel *f, const char **reason)
@@ -790,11 +805,22 @@ static int take_source(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, boo
         memmove(f->times+i, f->times+i+1, (f->num_times-i)*sizeof(*f->times));
     }
     bool metadata_only = false;
+    if (presentable && f->synchronizing && !f->enhancement_order.seen && !f->failed) {
+        if (no_residual && f->unpaired_mel != MEL_REQUIRES_EL) {
+            f->unpaired_mel = MEL_VERIFIED;
+            metadata_only = true;
+        } else if (!no_residual) {
+            f->unpaired_mel = MEL_REQUIRES_EL;
+        }
+    }
     if (no_residual && presentable && !f->failed && !f->el_started && !f->synchronizing &&
         source >= f->anchor_pts) {
+        /* The current BL RPU proves that there is no residual. Keep every
+         * compressed EL still needed by a later FEL picture in this GOP. */
+        metadata_only = true;
         for (unsigned i = 0; i < f->num_packets; ++i)
             if (f->packets[i].order == source) {
-                const int type = vcl_type(f->packets[i].packet, f->split->par_out);
+                const int type = vcl_type(f->packets[i].packet, f->enhancement_order.context);
                 metadata_only = !f->source_no_rasl || (type != 8 && type != 9);
                 break;
             }
@@ -810,6 +836,11 @@ static int take_source(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, boo
     else if (take_ready(f, source, frame)) {
         (*frame)->pts = (*frame)->best_effort_timestamp = pts;
         result = 1;
+    } else if (no_residual && f->el_started && !f->failed && !f->synchronizing &&
+               f->anchor_pts != AV_NOPTS_VALUE && source >= f->anchor_pts) {
+        /* Pump the enhancement decoder even when this particular BL needs
+         * no residual, so the next FEL picture still has its references. */
+        result = 3;
     } else if (f->failed || (f->eof && !f->recovering) ||
                (f->output_order != AV_NOPTS_VALUE && source < f->output_order))
     {
