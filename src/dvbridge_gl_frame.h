@@ -8,6 +8,7 @@ enum dvbridge_gl_layout {
     DVBRIDGE_NV12, DVBRIDGE_P010, DVBRIDGE_P012, DVBRIDGE_P016,
     DVBRIDGE_YUV420P10, DVBRIDGE_YUV444P10,
     DVBRIDGE_Y416,
+    DVBRIDGE_YUV420P8,
 };
 struct dvbridge_gl_plane {
     unsigned texture;

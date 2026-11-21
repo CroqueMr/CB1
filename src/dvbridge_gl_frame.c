@@ -34,6 +34,7 @@ bool dvbridge_gl_frame_import(struct dvbridge_gl_frame *out, pl_gpu gpu,
     bool planar = false, subsampled = true, packed = false;
     switch (layout) {
     case DVBRIDGE_NV12: depth = storage = 8; shift = 0; break;
+    case DVBRIDGE_YUV420P8: depth = storage = 8; shift = 0; planar = true; break;
     case DVBRIDGE_P010: depth = 10; storage = 16; shift = 6; break;
     case DVBRIDGE_P012: depth = 12; storage = 16; shift = 4; break;
     case DVBRIDGE_P016: depth = storage = 16; shift = 0; break;
