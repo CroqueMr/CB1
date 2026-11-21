@@ -432,13 +432,13 @@ source-tree damage and Python leak-disabled characterization remain open.
 
 ## Authority
 
-Dependency archive, patch and modified-source identities are locked in
-`config/dependencies.json`. libplacebo is pinned to
-`e2972fdd09adacd383656738d7d280f0cd84a761`, not current upstream. FFmpeg uses the
-locked 9.0 archive with matched patched producer/consumer headers. Historical
-extraction receipts are unchanged.
+The active FFmpeg and libplacebo fork revisions, archive digests and
+modified-source identities are recorded in `config/dependencies.json`.
+The 1.1 upgrade pairs FFmpeg 9.0.2 with libplacebo 7.387.0 and matched
+producer and consumer headers. Historical extraction receipts are unchanged.
 
-Inspected configured libplacebo files and SHA256:
+The following source hashes and binary receipts describe the original
+reference characterization on libplacebo 7.372.0:
 
 | Path | SHA256 |
 | --- | --- |
