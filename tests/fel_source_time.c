@@ -1,46 +1,32 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* Native splitter/parser; reuse only the existing VAAPI ioctl test boundary. */
+/* Independent native EL packets, with the established VAAPI test boundary. */
 #define main legacy_fel_queue_checks
 #include "fel_queue.c"
 #undef main
-#define submit_source dvbridge_fel_submit_source
+#define submit_source dvbridge_fel_submit_layers
 
 static void nonkey_dispositions(AVBufferRef *device)
 {
     AVCodecParameters *p=avcodec_parameters_alloc();assert(p);
     p->codec_type=AVMEDIA_TYPE_VIDEO;p->codec_id=AV_CODEC_ID_HEVC;
-    struct dvbridge_fel *f=dvbridge_fel_create(p,(AVRational){1,1000000});
+    struct dvbridge_fel *f=dvbridge_fel_create_layers(p,p,(AVRational){1,1000000});
     avcodec_parameters_free(&p);assert(f&&dvbridge_fel_device(f,device));
-    uint8_t wrapped[sizeof(seek_config)+32];size_t n=0;
-    for(size_t i=0;i<sizeof(seek_config);++i) {
-        wrapped[n++]=seek_config[i];
-        if(i>=3&&!memcmp(seek_config+i-3,"\0\0\0\1",4)){
-            wrapped[n++]=0x7e;wrapped[n++]=1;
-        }
-    }
     for(int i=0;i<24;++i) {
         AVPacket *packet=av_packet_alloc();assert(packet);
         const size_t slice=15+i%3;
-        assert(av_new_packet(packet,sizeof(synthetic_base)+n+2+slice)==0);
-        uint8_t *out=packet->data;
-        memcpy(out,synthetic_base,sizeof(synthetic_base));out+=sizeof(synthetic_base);
-        memcpy(out,wrapped,n);out+=n;
-        memcpy(out,"\0\0\1\x7e\1",5);out+=5;
-        memcpy(out,seek_base[i%3]+3,slice-3);
+        assert(av_new_packet(packet,sizeof(seek_config)+slice)==0);
+        memcpy(packet->data,seek_config,sizeof(seek_config));
+        memcpy(packet->data+sizeof(seek_config),seek_base[i%3],slice);
         packet->pts=packet->dts=1000+i;
         struct dvbridge_fel_source source={100+i,100+i,{1,90000},1,true};
         if(!i) {
-            AVPacket *first=av_packet_alloc();assert(first);
-            assert(av_new_packet(first,packet->size-sizeof(synthetic_base))==0);
-            memcpy(first->data,packet->data+sizeof(synthetic_base),first->size);
-            first->pts=first->dts=AV_NOPTS_VALUE;
             struct dvbridge_fel_source earlier={AV_NOPTS_VALUE,100,{1,90000},1,false};
-            assert(submit_source(f,first,&earlier));av_packet_free(&first);
-            av_shrink_packet(packet,sizeof(synthetic_base));source.enhancement_pts=AV_NOPTS_VALUE;
+            assert(submit_source(f,packet,&earlier));
+            source.enhancement_pts=AV_NOPTS_VALUE;
         }
-        assert(submit_source(f,packet,&source));av_packet_free(&packet);
+        assert(submit_source(f,i?packet:NULL,&source));av_packet_free(&packet);
         AVFrame *frame=NULL;
-        assert(dvbridge_fel_take(f,1000+i,&frame)==2&&!frame);
+        assert(dvbridge_fel_take(f,100+i,&frame)==2&&!frame);
     }
     assert(f->synchronizing && !f->num_times && !f->num_packets);
     dvbridge_fel_destroy(f);
@@ -53,7 +39,7 @@ int main(void)
         count=0;end=false;
         AVCodecParameters *p=avcodec_parameters_alloc();assert(p);
         p->codec_type=AVMEDIA_TYPE_VIDEO;p->codec_id=AV_CODEC_ID_HEVC;
-        struct dvbridge_fel *f=dvbridge_fel_create(p,(AVRational){1,1000000});
+        struct dvbridge_fel *f=dvbridge_fel_create_layers(p,p,(AVRational){1,1000000});
         avcodec_parameters_free(&p);assert(f);
         AVBufferRef *device=av_buffer_allocz(sizeof(AVHWDeviceContext));assert(device);
         ((AVHWDeviceContext*)device->data)->type=AV_HWDEVICE_TYPE_VAAPI;
@@ -62,6 +48,14 @@ int main(void)
         AVPacket *packet=av_packet_alloc();assert(packet);
         assert(av_new_packet(packet,sizeof(synthetic_paired))==0);
         memcpy(packet->data,synthetic_paired,sizeof(synthetic_paired));
+        AVBSFContext *fixture_split=NULL;
+        assert(av_bsf_list_parse_str("dovi_split=mode=el",&fixture_split)==0);
+        fixture_split->par_in->codec_id=AV_CODEC_ID_HEVC;
+        fixture_split->time_base_in=(AVRational){1,90000};
+        assert(av_bsf_init(fixture_split)==0);
+        assert(av_bsf_send_packet(fixture_split,packet)==0);
+        assert(av_bsf_receive_packet(fixture_split,packet)==0);
+        av_bsf_free(&fixture_split);
         const int64_t base[]={103,101,102},kodi[]={3000,1000,2000};
         for(int i=0;i<3;++i) {
             packet->pts=packet->dts=kodi[i];
@@ -70,11 +64,11 @@ int main(void)
         }
         for(int i=1;i<=3;++i) {
             AVFrame *frame=NULL;
-            int result=dvbridge_fel_take(f,1000*i,&frame);
+            int result=dvbridge_fel_take(f,100+i+offset,&frame);
             if(result!=1 && !(primer&&i==3))
                 fprintf(stderr,"source test offset=%d primer=%d picture=%d result=%d failed=%d maps=%u packets=%u frames=%u\n",offset,primer,i,result,f->failed,f->num_times,f->num_packets,f->num_frames);
             if(primer&&i==3)assert(result==2&&!frame);
-            else {assert(result==1&&frame&&frame->pts==1000*i);av_frame_free(&frame);}
+            else {assert(result==1&&frame&&frame->pts==100+i+offset);av_frame_free(&frame);}
         }
         if(primer) {
             packet->pts=packet->dts=3000;
@@ -87,24 +81,32 @@ int main(void)
         dvbridge_fel_reset(f);
         assert(submit_source(f,packet,&stale));
         AVFrame *frame=NULL;
-        assert(dvbridge_fel_take(f,4000,&frame)==1&&frame&&frame->pts==4000);
+        assert(dvbridge_fel_take(f,104+offset,&frame)==1&&frame&&frame->pts==104+offset);
         av_frame_free(&frame);
         dvbridge_fel_reset(f);
         // An EL-only terminal unit can satisfy a previously accepted BL.
         struct dvbridge_fel_source head={501,500,{1,90000},3,true};
         packet->pts=packet->dts=5000;
         assert(submit_source(f,packet,&head));
-        size_t el=0;
-        while(el+5<sizeof(synthetic_paired)&&memcmp(synthetic_paired+el,"\0\0\1\x7e\1",5))++el;
-        assert(el+5<sizeof(synthetic_paired));
-        av_packet_unref(packet);assert(av_new_packet(packet,sizeof(synthetic_paired)-el)==0);
-        memcpy(packet->data,synthetic_paired+el,packet->size);
-        packet->pts=packet->dts=AV_NOPTS_VALUE;
         struct dvbridge_fel_source tail={AV_NOPTS_VALUE,501,{1,90000},3,false};
         assert(submit_source(f,packet,&tail));
-        assert(dvbridge_fel_take(f,5000,&frame)==1&&frame&&frame->pts==5000);
+        assert(dvbridge_fel_take(f,501,&frame)==1&&frame&&frame->pts==501);
         av_frame_free(&frame);
         assert(dvbridge_fel_drain(f, NULL));
+        dvbridge_fel_reset(f);
+        // A prior EL anchor does not make an absent EL mandatory for a zero-residual RPU.
+        f->source_timed = true;
+        f->source_epoch = 4;
+        f->source_clock = (AVRational){1, 90000};
+        f->synchronizing = false;
+        f->anchor_pts = 500;
+        const struct dvbridge_fel_source mel = {501, AV_NOPTS_VALUE, {1, 90000}, 4, true};
+        assert(submit_source(f, NULL, &mel));
+        assert(take_source(f, 501, &frame, true) == 3 && !frame);
+        f->el_started = true;
+        const struct dvbridge_fel_source later_mel = {502, AV_NOPTS_VALUE, {1, 90000}, 4, true};
+        assert(submit_source(f, NULL, &later_mel));
+        assert(take_source(f, 502, &frame, true) == 3 && !frame);
         dvbridge_fel_reset(f);
         // A genuinely decoded leading picture is exact despite a later RAP PTS.
         f->source_timed=true;f->anchor_pts=100;f->num_times=1;

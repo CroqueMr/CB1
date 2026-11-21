@@ -2,7 +2,89 @@
 #include "reference_test.h"
 #include "cb1_hdr10_ingress.h"
 #include "cb1_hdr10_ai.h"
+#include "dvbridge_gl_frame.h"
+#include <GLES2/gl2ext.h>
 static double pq(double n){double v=pow(n/10000.,2610./16384.);return pow((3424./4096.+2413./128.*v)/(1+2392./128.*v),2523./32.);}
+
+static void test_hlg8(pl_gpu gpu, struct cb1_hdr10_ingress *ingress)
+{
+    const uint8_t code[3][4] = {{16,180,120,205}, {128,128,164,92}, {128,128,94,174}};
+    enum { SIZE = 16, CHANNELS = 4, SAMPLES = SIZE * SIZE * CHANNELS };
+    const int black = (2 * SIZE + 2) * CHANNELS;
+    const int white = (2 * SIZE + 13) * CHANNELS;
+    const int blue = (13 * SIZE + 2) * CHANNELS;
+    const int red = (13 * SIZE + 13) * CHANNELS;
+    GLuint tex[3];
+    glGenTextures(3,tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+    uint16_t reference[SAMPLES], hardware[SAMPLES];
+    for(int layout=0;layout<3;++layout){
+        const bool high=layout==0, planar=layout!=1;
+        struct dvbridge_gl_plane planes[3]={0};
+        for(int i=0;i<(planar?3:2);++i){
+            const int size = i ? SIZE / 2 : SIZE;
+            const bool pair = i && !planar;
+            uint8_t samples[SIZE * SIZE];
+            uint16_t expanded[SIZE * SIZE];
+            for (int y = 0; y < size; ++y) {
+                for (int x = 0; x < size; ++x) {
+                    const int quadrant = (y >= size / 2) * 2 + (x >= size / 2);
+                    const int offset = (y * size + x) * (pair ? 2 : 1);
+                    samples[offset] = code[i][quadrant];
+                    if (pair) samples[offset + 1] = code[2][quadrant];
+                    if (high) expanded[offset] = samples[offset] * 4;
+                }
+            }
+            glBindTexture(GL_TEXTURE_2D,tex[i]);
+            glTexImage2D(GL_TEXTURE_2D,0,high?GL_R16_EXT:pair?GL_RG8:GL_R8,size,size,0,
+                         pair?GL_RG:GL_RED,high?GL_UNSIGNED_SHORT:GL_UNSIGNED_BYTE,
+                         high?(const void*)expanded:samples);
+            if(layout==2 && i)
+                glTexParameteri(GL_TEXTURE_2D,i==1?GL_TEXTURE_SWIZZLE_G:GL_TEXTURE_SWIZZLE_A,GL_RED);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+            planes[i]=(struct dvbridge_gl_plane){tex[i],size,size};
+        }
+        glBindTexture(GL_TEXTURE_2D,0);
+        struct dvbridge_gl_frame imported={0};
+        const enum dvbridge_gl_layout format=high?DVBRIDGE_YUV420P10:
+            planar?DVBRIDGE_YUV420P8:DVBRIDGE_NV12;
+        assert(dvbridge_gl_frame_import(&imported,gpu,format,SIZE,SIZE,planes));
+        struct pl_frame *image=&imported.frame;
+        image->repr.sys=PL_COLOR_SYSTEM_BT_2020_NC;
+        image->repr.levels=PL_COLOR_LEVELS_LIMITED;
+        image->color.primaries=PL_COLOR_PRIM_BT_2020;
+        image->color.transfer=PL_COLOR_TRC_HLG;
+        pl_tex rgb;
+        assert(cb1_hdr10_ingress_rgb(ingress,image,&rgb)==CB1_AI_READY);
+        uint16_t pixels[SAMPLES];
+        assert(pl_tex_download(gpu,pl_tex_transfer_params(.tex=rgb,.ptr=pixels)));
+        if(high) {
+            memcpy(reference,pixels,sizeof(reference));
+        } else {
+            // Compare flat patch centers. R8 and R16 can round their
+            // sub-pixel chroma interpolation differently at patch edges.
+            const int centers[] = {black,white,blue,red};
+            for (unsigned i=0;i<sizeof(centers)/sizeof(centers[0]);++i)
+                for (int c=0;c<3;++c)
+                    assert(abs(pixels[centers[i]+c]-reference[centers[i]+c])<132);
+            if(planar)assert(memcmp(pixels,hardware,sizeof(hardware))==0);
+            else memcpy(hardware,pixels,sizeof(hardware));
+            assert(pixels[black]<64 && pixels[black+1]<64 && pixels[black+2]<64);
+            assert(pixels[white]>30000 && abs(pixels[white]-pixels[white+1])<16 &&
+                   abs(pixels[white]-pixels[white+2])<16);
+            assert(pixels[blue+2]>pixels[blue] && pixels[red]>pixels[red+2]);
+            image->repr.levels=PL_COLOR_LEVELS_FULL;
+            assert(cb1_hdr10_ingress_validate(image)==CB1_AI_INCOMPATIBLE);
+            image->repr.levels=PL_COLOR_LEVELS_LIMITED;
+            image->color.transfer=PL_COLOR_TRC_PQ;
+            assert(cb1_hdr10_ingress_validate(image)==CB1_AI_INCOMPATIBLE);
+        }
+        dvbridge_gl_frame_release(&imported);
+    }
+    glDeleteTextures(3,tex);
+}
+
 int main(int argc,char **argv)
 {
     assert(argc==2);
@@ -90,6 +172,7 @@ int main(int argc,char **argv)
     assert(!dvbridge_render_hdr10_ai_rgb(r,&policy,&prediction,&source,&g));
     source.repr.dovi=(void*)1;assert(cb1_hdr10_ingress_validate(&source)==CB1_AI_INCOMPATIBLE);
     dvbridge_renderer_destroy(r);assert(dvbridge_retirement_owner_destroy(&owner));
+    test_hlg8(gpu.gl->gpu,ingress);
     cb1_hdr10_ingress_destroy(&ingress);
     for(unsigned c=0;c<3;c++)pl_tex_destroy(gpu.gl->gpu,&source.planes[c].texture);
     reference_gpu_destroy(&gpu);return 0;

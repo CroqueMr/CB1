@@ -1,21 +1,19 @@
 {
   "schema": 1,
   "ownership": {
-    "ffmpeg": "CB1 canonical patches",
-    "libplacebo": "CB1 canonical patches"
+    "ffmpeg": "CroqueMr/FFmpeg source fork",
+    "libplacebo": "CroqueMr/libplacebo source fork"
   },
   "ffmpeg": {
-    "version": "9.0",
-    "upstream_release_reference": "d32b387f2b0a484599d4587d651891f0c63c4238",
-    "upstream_tag": "n9.0",
-    "upstream_tag_object": "5b9252abfe2fda0ccb71ed45cd7a954cc45d2b6f",
+    "version": "9.0.2",
+    "upstream_release_reference": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
+    "upstream_tag": "n9.0.2",
+    "upstream_tag_object": "ce8f11b9fac4cd7ccfb41ca7c01bc17f5cda8cc3",
     "inherited_notice_revision": "946fcce07b6dcd0331c8cc609192aeff5e1924f8",
-    "source_authority": "The exact pinned archive digest is authoritative; release-tag reference is not an archive byte-equivalence claim. Inherited notice locator is a later 9.0.2 commit and is not the extraction source.",
-    "known_release_reference_divergence": "The pinned archive dovi_rpudec.c lacks the n9.0 VALIDATE(mapping->num_x_partitions, 1, 0xFFFF) and VALIDATE(mapping->num_y_partitions, 1, 0xFFFF) lines. Metadata header and isom_tags.c match the n9.0 reference. No source pin, patch or algorithm was changed.",
-    "official_archive_verification": "A fresh HTTPS retrieval from source_url on 2026-10-01 has the exact archive_sha256 and byte-identical parser. Both official and pinned archives lack the two Git-reference lines; no cache/official-archive divergence was found.",
-    "source_url": "https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz",
-    "archive": "ffmpeg-9.0.tar.xz",
-    "archive_sha256": "7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52",
+    "source_authority": "The pinned source fork archive selects the exact compiled sources. The inherited 9.0 release archive divergence remains documented in the RC3 source inventory.",
+    "source_url": "https://github.com/CroqueMr/FFmpeg/archive/b3cb7d8dbaffa676a2227370bbf368c3c3f9c1af.tar.gz",
+    "archive": "FFmpeg-b3cb7d8dbaffa676a2227370bbf368c3c3f9c1af.tar.gz",
+    "archive_sha256": "edf82f0da7a17b3225126058e99bd55f7c574868322e5bc45c554656a1240bab",
     "modified": true,
     "interfaces": [
       "AVDOVIDmData.dvbridge_raw_magic",
@@ -24,14 +22,15 @@
       "AVDOVIMetadata.ext_block_size",
       "ff_dovi_attach_side_data"
     ],
-    "compatibility": "Matched pinned modified headers and producer/consumer only; arbitrary binary mixes unsupported"
+    "compatibility": "Matched pinned modified headers and producer/consumer only; arbitrary binary mixes unsupported",
+    "fork_revision": "b3cb7d8dbaffa676a2227370bbf368c3c3f9c1af"
   },
   "libplacebo": {
-    "version": "7.372.0",
-    "upstream_revision": "e2972fdd09adacd383656738d7d280f0cd84a761",
-    "source_url": "https://github.com/haasn/libplacebo/archive/e2972fdd09adacd383656738d7d280f0cd84a761.tar.gz",
-    "archive": "libplacebo-e2972fdd09adacd383656738d7d280f0cd84a761.tar.gz",
-    "archive_sha256": "2dc029b7686455054fb5e76dd8c084cbf4fa4159f33364c5b7f9afc8b3611811",
+    "version": "7.387.0",
+    "upstream_revision": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
+    "source_url": "https://github.com/CroqueMr/libplacebo/archive/f7d8a9b9a0a80c7f21fd1c44849b92e3bcca847f.tar.gz",
+    "archive": "libplacebo-f7d8a9b9a0a80c7f21fd1c44849b92e3bcca847f.tar.gz",
+    "archive_sha256": "0fa8f705f1a02dd8c9ebc6861d61ec45b935ffff9e0c210536147bdaa2fa608d",
     "modified": true,
     "numerical_realization": "Existing default-off cb1_stable_pq uses the original ST2084 operator/constants/domain. Its shared inverse helper uses a fixed general expm1 P5(z/16) seed and four deficit doublings, an explicitly bounded primitive approximation, not an exact identity or fitted curve. Original nonpositive-to-zero behavior is retained with positive-only log; negative super-white deficits and the final power remain. Forward emission and native/Basic are unchanged.",
     "interfaces": [
@@ -53,8 +52,11 @@
       "pl_render_params.cb1_fel_filter and pl_cb1_fel_filter_abi (generation 2, default zero, EL-only bilinear/reference selector)",
       "pl_dovi_metadata.cb1_native_bounds and cb1_nlq_max (default off, matched processing ABI 10)",
       "pl_render_params.cb1_dovi_reference (default null, contract 1, matched processing ABI 10)",
-      "pl_color_map_args.cb1_tone_map (Expert opt-in; PL_CB1_EXPERT_TONE_ABI; rebuild all consumers)"
-    ]
+      "pl_color_map_args.cb1_tone_map (Expert opt-in; PL_CB1_EXPERT_TONE_ABI; rebuild all consumers)",
+      "pl_dovi_metadata.cb1_normalized_codes (explicit CB1 adapter; upstream integer code values remain the default)"
+    ],
+    "upstream_tag": "v7.387.0",
+    "fork_revision": "f7d8a9b9a0a80c7f21fd1c44849b92e3bcca847f"
   },
   "patches": {
     "patches/libplacebo/libplacebo-9919-player-led-host.patch": "a6de071a3a0b8d9e4ce0e4e2dcb31dc5124838aaaf33948adc903346019cfb24",
@@ -94,29 +96,34 @@
     "ffmpeg/libavcodec/dovi_rpudec.c": "2a26ad8c1e309c431e776b25204df063e8c7a306266ad271782bfd1a4d085659",
     "ffmpeg/libavformat/isom_tags.c": "9e93c484c91d4f6e8c6f97c7cbe22058821685ef04f2a0347c316f82ed9dcf4b",
     "ffmpeg/libavutil/dovi_meta.h": "f860511cb8be3c992b4ef7da6747d8dc9670d64d276aeab3a7e6867112857a02",
-    "libplacebo/src/dispatch.c": "a1ad0fc629e7941774f03ea43cb68828d671cb676bceff3e9dd226cffe51ce23",
-    "libplacebo/src/opengl/gpu.c": "d8e046d0897c34a6800da88ad8e84845b5fcf6fcded5a1fdf2aa0bb1d734f477",
-    "libplacebo/src/opengl/formats.c": "a57ec2a106860a6e7e2ffb0ed992556c9146a37295e5a4790633c93594f9e0c6",
-    "libplacebo/src/include/libplacebo/renderer.h": "6d24ce9c6ace75599092b23b8ec67ad3ede0e7153da4278d488bfa364a66ca89",
+    "libplacebo/src/dispatch.c": "4908f31569636cab0873f9207b8430b1f92fc57c460dfff37cbcd4bb0ecde5d2",
+    "libplacebo/src/opengl/gpu.c": "d6ac9c993b23375154e18d482dec9dac92e8f427fac96c784dc8b7fe68174596",
+    "libplacebo/src/opengl/formats.c": "a009f08f71a7edaa8a4aee82a0fccb45f07e1a83f1ce5d7c1f94742e49455456",
+    "libplacebo/src/include/libplacebo/renderer.h": "995732231af373f16e20637b7790e188ceb34ef89356f54d9a7245b04c558c40",
     "libplacebo/src/include/libplacebo/shaders/sampling.h": "f04810908f907a5a16320b18b9222b0b5006647e2f0a1f66d1002bcdc2ad4496",
     "libplacebo/src/include/libplacebo/shaders.h": "bdc29cddb6545d09ce4b2c6602237cbb5d50c5ac2c1c55cecf9fa4794086bb60",
     "libplacebo/src/include/libplacebo/dispatch.h": "2208cbf66dc61069377d645309852319657be4b12fee6297315a2310ceb75d26",
-    "libplacebo/src/renderer.c": "fc032b0ce70805e2cc1ade2f7095da4221b1ff33c69da19ca0adc1763e287c0b",
-    "libplacebo/src/shaders/colorspace.c": "58e55f0fffe08a6e9b17b4176159fd01de1762c9cf067b1242b91e95e3d62234",
-    "libplacebo/src/include/libplacebo/shaders/colorspace.h": "c232670e4f772f83807117396aab94d3701da57c765df627846cd2e0bbbbbbff",
-    "libplacebo/src/shaders/sampling.c": "29f67f42d64d7a4f17eaa8e515a46809e8767a0111540b96900c506b80bd21ac",
+    "libplacebo/src/renderer.c": "6c77d2c5b66039c68c2af95d646bbe529192987daf8ed2f8e74aafad0a5498ea",
+    "libplacebo/src/shaders/colorspace.c": "a35005b50acfda8b97eb585c5a798422150d582717472f0d4faed4d88316d265",
+    "libplacebo/src/include/libplacebo/shaders/colorspace.h": "06cfd7e11da80971552d28eab8ecc455d2e9591aca6f3bc2cf316603a9aa390d",
+    "libplacebo/src/shaders/sampling.c": "1dcfcf4335cf98dbe2e0a1982cf1f367ed968d1867c883738cf240b434bd5300",
     "ffmpeg/libavcodec/itut35.c": "37147695cfb37df916a4a58859c496ca225b3602fdd483a0ea277564b7a39f02",
     "ffmpeg/libavcodec/itut35.h": "003f72cd64cf053996ff5b32adb05497f6feae627ba8f432c2258957ec60b3f8",
     "ffmpeg/libavutil/frame.h": "0ce5f16261e98fd7b821e19674b74c0debe2e795e8405f9564650e36eaedea0b",
-    "libplacebo/src/include/libplacebo/colorspace.h": "417cf28c6873baed22ccc64033c5bccb56fbec54f931ba5699250339b77d8eee",
-    "libplacebo/src/include/libplacebo/utils/libav_internal.h": "efc6965d7a3581c82fad1d4c699ae6305ffba45c26102b0dc003572a362b6c40",
-    "libplacebo/src/tests/gpu_tests.c": "3a9b3e24aed74365766f5ad98ed121eb7aa78f0711df0f6165b63cd812ed6e90",
+    "libplacebo/src/include/libplacebo/colorspace.h": "e1fbf7a63fe12d71544ef2fb025f8b48069faaff212ab9382cc0fd49603e431d",
+    "libplacebo/src/include/libplacebo/utils/libav_internal.h": "6542fc59498fb715ac82dff75944a2c33e7e49ee2d67e565c58fc36bed7f53cb",
+    "libplacebo/src/tests/gpu_tests.c": "aa29609a6dc0a75d139050380dbe2bae6235d0741e6f647c3eba5a78054acdc3",
     "libplacebo/src/shaders/dovi_reference.c": "f12c7dba16d4e2ae41c652d83bae9dc6d50f9236e4d09f988304d75774ffb09e",
     "libplacebo/src/shaders/meson.build": "f4ba519f76d227adabbab791814fb62f96d45236c08889409738de7eca31304e",
-    "libplacebo/src/shaders.h": "22fc30757f176594a552acacad4c41f7a947be177e2ac88c6aef69bc3c3bc040",
-    "ffmpeg/libavformat/mpegts.c": "229c92abd17c0c9bc37338adf660515d18f84af85ba4339e782ff92e4af21565",
+    "libplacebo/src/shaders.h": "c97cd55f7ee092b30c6398b0d385ad1314b16c1d742459dd09b7f30f2bfbe181",
+    "ffmpeg/libavformat/mpegts.c": "954bdc5076ab1a96b560b5d49633be00964b97964488b24336a413fb667a28e5",
     "libplacebo/src/mmr_lut.h": "7d72e001b9c94b6b71aec11d76c19f686296b3fece23ab0123fc7061b4fefc8e",
-    "ffmpeg/libavformat/matroskadec.c": "e8fbe599ef8be450b6ae1818b7392186155ec4e7ce4f5bc422786d9a7c2517c5",
-    "ffmpeg/libavcodec/pgssubdec.c": "46f628e57af1c998b3654b11fe46d984db3f13e23127fd4044726216d91cf836"
+    "ffmpeg/libavformat/matroskadec.c": "2fb80649290ddc27d275d1128f9122469014bc51c17df3a68eead9fdf5356b38",
+    "ffmpeg/libavcodec/pgssubdec.c": "46f628e57af1c998b3654b11fe46d984db3f13e23127fd4044726216d91cf836",
+    "libplacebo/src/colorspace.c": "67677f747e53302c2c1b03546f627e6db0748e823e34ba6fcffdcf1a1c028e94",
+    "libplacebo/src/colorspace.h": "be89c90273f853dc7cf3add68a96950fce52abf07a9926386bd25234449cbb5a",
+    "libplacebo/src/gamut_mapping.c": "1f87d68549d20096e4c76e9b206a70e5c2b4755cb91b06b086ea034b0018843f",
+    "libplacebo/src/include/libplacebo/utils/libav.h": "1a7e026d7b2bc1c11791b93c141a3451bb722fcd9a85c8388886acff027c81c6",
+    "libplacebo/src/opengl/gpu.h": "f8248ecfe3a6d1674f197f6c71dd890fcbbc0fd296bebebccfa6694e823ea881"
   }
 }
