@@ -44,19 +44,22 @@ void cb1_hdr10_ingress_destroy(struct cb1_hdr10_ingress **ctx)
 enum cb1_ai_status cb1_hdr10_ingress_validate(const struct pl_frame *source)
 {
     if (!source)return CB1_AI_INVALID;
+    const struct pl_bit_encoding bits=source->repr.bits;
+    const bool hlg8=source->color.transfer==PL_COLOR_TRC_HLG &&
+        bits.sample_depth==8 && bits.color_depth==8 && bits.bit_shift==0;
+    const bool high_depth=bits.sample_depth==16 && (bits.color_depth==10 || bits.color_depth==12) &&
+        (bits.bit_shift==0 || bits.bit_shift==16-bits.color_depth);
     if ((source->color.transfer!=PL_COLOR_TRC_PQ && source->color.transfer!=PL_COLOR_TRC_HLG) || source->color.primaries!=PL_COLOR_PRIM_BT_2020 ||
         source->repr.sys!=PL_COLOR_SYSTEM_BT_2020_NC || source->repr.levels!=PL_COLOR_LEVELS_LIMITED ||
         source->enhancement_layer || source->repr.dovi || source->num_overlays || source->profile.len || source->icc || source->lut ||
-        (source->num_planes!=2 && source->num_planes!=3) || source->repr.bits.sample_depth!=16 ||
-        (source->repr.bits.color_depth!=10 && source->repr.bits.color_depth!=12) ||
-        (source->repr.bits.bit_shift!=0 && source->repr.bits.bit_shift!=16-source->repr.bits.color_depth))
+        (source->num_planes!=2 && source->num_planes!=3) || (!high_depth && !hlg8))
         return CB1_AI_INCOMPATIBLE;
     pl_tex y=source->planes[0].texture,u=source->planes[1].texture;
     if (!y || !u)return CB1_AI_INVALID;
     const int width=y->params.w,height=y->params.h;
     unsigned sub=u->params.w==width/2 && u->params.h==height/2,packed=source->num_planes==2;
     const struct pl_rect2df crop=source->crop;
-    if (!isfinite(crop.x0) || !isfinite(crop.y0) || !isfinite(crop.x1) || !isfinite(crop.y1) ||
+    if ((hlg8 && !sub) || !isfinite(crop.x0) || !isfinite(crop.y0) || !isfinite(crop.x1) || !isfinite(crop.y1) ||
         crop.x0<0 || crop.y0<0 || crop.x1>width || crop.y1>height ||
         crop.x1<=crop.x0 || crop.y1<=crop.y0 || crop.x1-crop.x0>4096 || crop.y1-crop.y0>2160 ||
         floorf(crop.x0)!=crop.x0 || floorf(crop.y0)!=crop.y0 ||
@@ -69,7 +72,10 @@ enum cb1_ai_status cb1_hdr10_ingress_validate(const struct pl_frame *source)
         if (!p->texture || p->texture->params.d || !p->texture->params.sampleable || p->flipped ||
             p->shift_x!=0 || p->shift_y!=0 || p->component_mapping[0]!=i ||
             p->components!=(packed && i==1?2:1) ||
-            p->texture->params.format->type!=PL_FMT_UNORM || p->texture->params.format->component_depth[0]!=16 ||
+            p->texture->params.format->type!=PL_FMT_UNORM ||
+            (hlg8 && p->texture->params.format->num_components!=p->components) ||
+            p->texture->params.format->component_depth[0]!=bits.sample_depth ||
+            (packed && i==1 && p->texture->params.format->component_depth[1]!=bits.sample_depth) ||
             p->texture->params.w!=(i?u->params.w:width) || p->texture->params.h!=(i?u->params.h:height))
             return CB1_AI_INCOMPATIBLE;
     }
