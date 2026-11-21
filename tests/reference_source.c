@@ -8,6 +8,9 @@
 int main(void)
 {
     struct pl_dovi_metadata d={0};
+#ifdef PL_HAVE_CB1_NORMALIZED_DOVI
+        d.cb1_normalized = true;
+#endif
     int w,h; assert(scanf("%d%d",&w,&h)==2 && w>0 && h>0 && w*h<=4096);
     for(int c=0;c<3;c++)assert(scanf("%f",&d.nonlinear_offset[c])==1);
     for(int y=0;y<3;y++)for(int x=0;x<3;x++)assert(scanf("%f",&d.nonlinear.m[y][x])==1);
