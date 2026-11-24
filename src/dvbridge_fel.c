@@ -943,6 +943,11 @@ bool dvbridge_fel_has_enhancement(const struct dvbridge_fel *f)
     return f && f->enhancement_order.seen;
 }
 
+bool dvbridge_fel_recovering(const struct dvbridge_fel *f)
+{
+    return f && f->recovering;
+}
+
 bool dvbridge_fel_exhausted(const struct dvbridge_fel *f)
 {
     return f && !f->failed && f->eof && !f->num_frames && !f->num_packets;

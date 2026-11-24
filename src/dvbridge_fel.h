@@ -37,6 +37,8 @@ int dvbridge_fel_take_mel(struct dvbridge_fel *fel, int64_t pts, AVFrame **frame
                          const void *metadata, size_t metadata_size);
 bool dvbridge_fel_failed(const struct dvbridge_fel *fel);
 bool dvbridge_fel_has_enhancement(const struct dvbridge_fel *fel);
+/* Recovery is waiting for a new shared random-access picture. */
+bool dvbridge_fel_recovering(const struct dvbridge_fel *fel);
 /* Decoder reached EOF and no enhancement surface remains to pair. */
 bool dvbridge_fel_exhausted(const struct dvbridge_fel *fel);
 #endif
