@@ -121,6 +121,80 @@ static AVPacket *packet(int64_t pts)
     return p;
 }
 
+static void ambiguous_mel(AVBufferRef *device)
+{
+    size_t bytes;
+    AVDOVIMetadata *metadata=av_dovi_metadata_alloc(&bytes);assert(metadata);
+    AVDOVIRpuDataHeader *header=av_dovi_get_header(metadata);
+    AVDOVIDataMapping *mapping=av_dovi_get_mapping(metadata);
+    header->coef_log2_denom=23;
+    mapping->nlq_method_idc=AV_DOVI_NLQ_LINEAR_DZ;
+    for(unsigned i=0;i<3;i++)mapping->nlq[i].vdr_in_max=UINT64_C(1)<<23;
+    assert(dvbridge_dv_is_mel(metadata));
+    for(int scenario=0;scenario<6;scenario++) {
+        AVCodecParameters *p=avcodec_parameters_alloc();assert(p);
+        p->codec_type=AVMEDIA_TYPE_VIDEO;p->codec_id=AV_CODEC_ID_HEVC;
+        struct dvbridge_fel *f=dvbridge_fel_create(p,(AVRational){1,1000000});
+        avcodec_parameters_free(&p);assert(f&&dvbridge_fel_device(f,device));
+        AVPacket *au=packet(0);assert(dvbridge_fel_submit(f,au));
+        f->base_order.context->has_b_frames=3;
+        f->base_order.maximum=31;f->enhancement_order.maximum=30;
+        f->packets[0].order=31;
+        f->times[0].order=31;f->times[0].pts=3100;f->times[0].key=false;
+        f->times[1].order=30;f->times[1].pts=3000;f->times[1].presentable=true;
+        f->num_times=2;
+        AVFrame *el=NULL;
+        ready[0]=30;count=1;end=false;
+        if(scenario==3){
+            for(unsigned i=1;i<QUEUE_MAX;i++){
+                f->packets[i]=(struct fel_packet){.packet=av_packet_clone(f->packets[0].packet),
+                    .order=31+i,.access=FEL_KEY};
+                assert(f->packets[i].packet);
+                f->packet_bytes+=f->packets[i].packet->size;
+                f->times[i+1].order=31+i;f->times[i+1].pts=(31+i)*100;
+                f->times[i+1].presentable=true;
+            }
+            f->num_packets=QUEUE_MAX;f->num_times=QUEUE_MAX+1;
+            f->base_order.maximum=31+QUEUE_MAX-1;
+            au->pts=au->dts=6300;
+            assert(dvbridge_fel_submit(f,au) && !f->num_packets);
+            f->anchor_pts=3000;
+            assert(dvbridge_fel_take(f,2900,&el)==2 && !el);
+        }
+        assert(dvbridge_fel_take(f,3000,&el)==1 && el->pts==3000);
+        av_frame_free(&el);
+        assert(dvbridge_fel_take_mel(f,3100,&el,metadata,bytes)==3 && !el);
+        assert(!dvbridge_fel_failed(f));
+        if(scenario==3)for(int i=32;i<=63;i++)
+            assert(dvbridge_fel_take_mel(f,i*100,&el,metadata,bytes)==3&&!el);
+        unsigned sent=submissions;
+        int first=scenario==3?64:32;
+        for(int i=first;i<first+100;i++){
+            au->pts=au->dts=i*100;
+            assert(dvbridge_fel_submit(f,au));
+            assert(dvbridge_fel_take_mel(f,au->pts,&el,metadata,bytes)==3 && !el);
+            assert(!f->num_packets && !f->num_times);
+        }
+        assert(submissions==sent); /* No EL is submitted with an unproven identity. */
+        if(scenario==0||scenario==3){
+            assert(dvbridge_fel_drain(f,NULL)&&dvbridge_fel_exhausted(f));
+            assert(!dvbridge_fel_recovering(f));
+        } else {
+            au->pts=au->dts=13200;
+            if(scenario!=5)assert(dvbridge_fel_submit(f,au));
+            if(scenario==1)mapping->nlq[0].nlq_offset=1;
+            assert(dvbridge_fel_take_mel(f,au->pts,&el,scenario==2?NULL:metadata,
+                scenario==4?0:bytes)==-1 && !el);
+            assert(dvbridge_fel_failed(f));
+            mapping->nlq[0].nlq_offset=0;
+        }
+        dvbridge_fel_reset(f);
+        au->pts=au->dts=0;assert(dvbridge_fel_submit(f,au));
+        assert(dvbridge_fel_take(f,0,&el)==1 && el->pts==0);
+        av_frame_free(&el);av_packet_free(&au);dvbridge_fel_destroy(f);
+    }
+    av_free(metadata);
+}
 int main(void)
 {
     if(!avcodec_find_decoder(AV_CODEC_ID_HEVC)){
@@ -391,7 +465,7 @@ int main(void)
         int result=dvbridge_fel_take(f,3100,&frame);
         if(variant==0) {
             assert(result==-1 && !frame && dvbridge_fel_failed(f));
-            assert(submissions==sent); /* Do not send ambiguous pixels at all. */
+            assert(submissions==sent+1); /* Only drain the already-admitted EL. */
         } else {
             /* Healthy asymmetric IDR with a non-reordered BL, and a shared
              * key with reordered BL, retain their exact existing admission. */
@@ -401,6 +475,7 @@ int main(void)
         dvbridge_fel_destroy(f);
     }
     present_seek_preroll_is_not_missing(device);
+    ambiguous_mel(device);
     av_buffer_unref(&device);
     av_packet_free(&p);
     puts("PASS: real EL split, immutable input, bounded queue, exact PTS, reset, EOF and errors");
