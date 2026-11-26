@@ -4541,6 +4541,10 @@ static bool ai_render_pixels(struct dvbridge_renderer *r,
     mask.overlay=overlay;
     mask.gui_quad=overlay && overlay->optimized && !overlay->input_pq && r->fragment_quad;
     mask.straight_overlay=r->optimized_dv && overlay && !overlay->input_pq;
+    // Enhanced analysis consumes normalized PQ, including on the FP32 fallback.
+    if(!sdr && !packed && !fused && r->dv.active && r->dv.ai_source &&
+       r->dv.enhanced_plan.status==CB1_DVE_READY)
+        mask.maximum_pq=1.0f;
     if(packed)mask.packets=dvbridge_packets(r->pending,&mask.count);
     const uint32_t empty_packets[640]={0};
     if(prepack)mask.packets=empty_packets;

@@ -390,6 +390,9 @@ if(CB1_ENABLE_HDR10_AI)
   add_executable(hdr10_ai_enhanced hdr10_ai_enhanced.c)
   target_link_libraries(hdr10_ai_enhanced PRIVATE dvbridge_core)
   add_test(NAME hdr10_ai_enhanced COMMAND hdr10_ai_enhanced)
+  add_executable(hdr10_ai_pq_domain hdr10_ai_pq_domain.c)
+  target_link_libraries(hdr10_ai_pq_domain PRIVATE dvbridge_core)
+  add_test(NAME hdr10_ai_pq_domain COMMAND hdr10_ai_pq_domain)
   add_test(NAME metadata_hook_shape COMMAND hdr10_ai_enhanced --metadata-shape)
   add_test(NAME hdr10_ai_enhanced_nodirect COMMAND "${CMAKE_COMMAND}" -E env
     CB1_TEST_NO_FETCH=1 "$<TARGET_FILE:hdr10_ai_enhanced>")
@@ -401,7 +404,7 @@ if(CB1_ENABLE_HDR10_AI)
   add_test(NAME hdr10_ai_transport COMMAND hdr10_ai_transport)
   set_tests_properties(hdr10_ai_transport PROPERTIES SKIP_RETURN_CODE 77)
   set_tests_properties(hdr10_ai_gpu_extrema hdr10_ai_gpu_identity hdr10_ai_gpu_quantiles
-    hdr10_ai_gpu_statistics hdr10_ai_gpu_spatial hdr10_ai_gpu_source hdr10_ai_gpu_source_nocompact hdr10_ai_gpu_ingress hdr10_ai_live hdr10_ai_render hdr10_ai_enhanced metadata_hook_shape hdr10_ai_enhanced_nodirect hdr10_ai_enhanced_live hdr10_ai_enhanced_retry hdr10_ai_transport PROPERTIES ENVIRONMENT
+    hdr10_ai_gpu_statistics hdr10_ai_gpu_spatial hdr10_ai_gpu_source hdr10_ai_gpu_source_nocompact hdr10_ai_gpu_ingress hdr10_ai_live hdr10_ai_render hdr10_ai_enhanced hdr10_ai_pq_domain metadata_hook_shape hdr10_ai_enhanced_nodirect hdr10_ai_enhanced_live hdr10_ai_enhanced_retry hdr10_ai_transport PROPERTIES ENVIRONMENT
     "LIBGL_ALWAYS_SOFTWARE=1;GALLIUM_DRIVER=llvmpipe;EGL_PLATFORM=surfaceless;ASAN_OPTIONS=detect_leaks=1;UBSAN_OPTIONS=halt_on_error=1")
   add_test(NAME hdr10_ai_malformed_bundle COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_hdr10_ai_bundles.py"
