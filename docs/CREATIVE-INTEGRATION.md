@@ -37,9 +37,10 @@ audio or player integration.
 ## Processing scope
 
 LLDV Reference – HDR10 Output uses an explicit frame-owned PQ tone curve,
-separate display calibration and compatible L2 guidance. It does not execute the
-full independent `cb1-cm4-v1` scalar/spatial reference. L3/L8 are not stacked onto
-this runtime curve; L8 spatial and secondary controls remain unexecuted.
+separate display calibration, resolved L1/L3 guidance and applicable HDR L8
+pointwise controls (otherwise compatible L2). It does not execute the full
+independent `cb1-cm4-v1` scalar/spatial reference; L8 spatial and secondary
+controls remain unexecuted.
 Dolby Vision Adaptive HDR Mapping uses `cb1-dve-pixel-v1`: trim-guided expansion after reconstruction,
 protected shadows, common RGB gain and fresh output metadata. Added light is
 bounded by the display reference; existing brighter samples are not reduced.

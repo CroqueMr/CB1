@@ -74,13 +74,12 @@ static bool prepare(struct cb1_hdr10_expert_plan *out,struct dvbridge_cm4_coeffi
     const AVDOVIDmData *l1=av_dovi_find_level(metadata,1);
     bool analysis=l1 && l1->l1.min_pq<=l1->l1.avg_pq &&
         l1->l1.avg_pq<=l1->l1.max_pq && l1->l1.max_pq<=4095;
-    if(cm4 && p.creative.analysis_valid)analysis=true;
+    if(p.creative.analysis_valid)analysis=true;
     else{
         p.creative.analysis[0]=analysis?l1->l1.min_pq:0;
         p.creative.analysis[1]=analysis?l1->l1.max_pq:0;
         p.creative.analysis[2]=analysis?l1->l1.avg_pq:0;
         p.creative.analysis_valid=analysis;
-        if(!cm4)p.creative.l3_present=false;
     }
     unsigned maximum=analysis?p.creative.analysis[1]:color->source_max_pq;
     p.creative.l1_present=analysis;
@@ -91,7 +90,7 @@ static bool prepare(struct cb1_hdr10_expert_plan *out,struct dvbridge_cm4_coeffi
            (p.creative.analysis[1]!=l1->l1.max_pq || p.creative.analysis[2]!=l1->l1.avg_pq))
             p.creative.applied_levels|=1u<<3;
     }
-    if(cm4)player_led_trims(&p.creative,cm4);
+    player_led_trims(&p.creative,cm4);
     for(unsigned i=0;i<3;i++)p.tone_shape[i]=(p.creative.codes[i]-2048)/2048;
     if(!analysis)p.creative.reason=l1?DVBRIDGE_CREATIVE_STATIC_UNUSABLE_L1:DVBRIDGE_CREATIVE_STATIC_MISSING_L1;
     else if(p.creative.reason==DVBRIDGE_CREATIVE_STATIC_UNUSABLE_L1 ||
@@ -131,7 +130,8 @@ static bool prepare(struct cb1_hdr10_expert_plan *out,struct dvbridge_cm4_coeffi
 bool cb1_hdr10_expert_prepare(struct cb1_hdr10_expert_plan *out,
     const struct dvbridge_policy *policy,const void *metadata,size_t bytes,bool paired)
 {
-    return prepare(out,NULL,policy,metadata,bytes,paired);
+    struct dvbridge_cm4_coefficients cm4;
+    return prepare(out,&cm4,policy,metadata,bytes,paired);
 }
 
 bool cb1_player_led_prepare(struct cb1_hdr10_expert_plan *out,
@@ -139,10 +139,8 @@ bool cb1_player_led_prepare(struct cb1_hdr10_expert_plan *out,
     const void *metadata,size_t bytes,bool paired)
 {
     if(!cm4 || !policy)return false;
-    if(policy->mode!=DVBRIDGE_MODE_PLAYER_LED)
-        return prepare(out,cm4,policy,metadata,bytes,paired);
     struct dvbridge_policy mapping=*policy;
-    mapping.mode=DVBRIDGE_MODE_HDR10_EXPERT;
+    if(mapping.mode==DVBRIDGE_MODE_PLAYER_LED)mapping.mode=DVBRIDGE_MODE_HDR10_EXPERT;
     return prepare(out,cm4,&mapping,metadata,bytes,paired);
 }
 

@@ -100,10 +100,9 @@ criteria. The reference is not a complete TV mapper or a panel measurement.
 ## Rendering boundary
 
 LLDV Reference – HDR10 Output reconstructs BL and matched applicable EL once,
-then maps raw L1 scene guidance through its explicit player-led PQ curve.
-Compatible L2 primary controls shape that tone LUT with protected endpoints;
-chroma executes in bounded target-gamut RGB. L3 offsets and a full L8 creative
-operator are not added to this runtime. Final BT.2020/PQ encoding and Kodi
+then maps resolved L1/L3 scene guidance through its explicit player-led PQ curve.
+Applicable HDR L8 pointwise controls replace L2 compatibility, not stack with it.
+L8 spatial and secondary controls remain unexecuted. Final BT.2020/PQ encoding and Kodi
 scaling do not add a second scene tone map. Source metadata is immutable.
 [Runtime equations](ALGORITHMS.md#dolby-vision-to-lldv-reference--hdr10-output).
 
@@ -160,8 +159,9 @@ describes creative intent, not a complete numerical mapper. Independent CM4
 reference outputs and tolerances qualify this project's numerical contract only.
 
 The independent CM4 scalar/spatial reference is retained for numerical/API
-qualification. LLDV Reference – HDR10 Output uses explicit PQ mapping
-and available L2 compatibility instead; it does not execute a full L8 creative pass.
+qualification. LLDV Reference – HDR10 Output uses explicit PQ mapping with
+applicable pointwise HDR L8 controls or L2 compatibility; it does not execute
+a full L8 creative pass.
 Dolby Vision Adaptive HDR Mapping uses `cb1-dve-pixel-v1`; the older `cb1-dve-v7`
 fitter remains an offline numerical reference, not the selected playback path.
 Unsupported guidance preserves a coherent native pair rather than a partial edit.
