@@ -20,6 +20,8 @@ static void player_led_plan(void)
     m->num_ext_blocks=4;
     struct cb1_hdr10_expert_plan p;
     struct dvbridge_cm4_coefficients cm4;
+    assert(cb1_hdr10_expert_prepare(&p,&policy,m,bytes,false));
+    assert(p.creative.backend==DVBRIDGE_CREATIVE_CM4 && (p.creative.applied_levels&(1u<<8)));
     assert(cb1_player_led_prepare(&p,&cm4,&policy,m,bytes,false));
     assert(p.creative.analysis[1]==3015 && p.creative.analysis[2]==1564);
     assert(p.creative.applied_levels&(1u<<3));
@@ -31,6 +33,11 @@ static void player_led_plan(void)
     assert(cb1_player_led_prepare(&p,&cm4,&policy,m,bytes,false));
     assert(p.creative.backend==DVBRIDGE_CREATIVE_CM29_COMPATIBILITY && p.tone_shape[0]==.5);
     assert(!p.creative.l8_coverage.applied && !cm4.peak_nits);
+    AVDOVIDmData *l8=av_dovi_get_ext(m,3);
+    l8->l8.target_display_index=l8->dvbridge_original_bytes[0]=1;
+    assert(cb1_hdr10_expert_prepare(&p,&policy,m,bytes,false));
+    assert(!p.creative.l8_coverage.applied && p.creative.backend==DVBRIDGE_CREATIVE_CM29_COMPATIBILITY);
+    l8->l8.target_display_index=l8->dvbridge_original_bytes[0]=48;
     struct dvbridge_policy edid={.mode=DVBRIDGE_MODE_PLAYER_LED,
         .tv={2484,DVBRIDGE_PANEL_UNSET,DVBRIDGE_GAMUT_BT2020},
         .expert_black_nits=.8,.lldv_edid_version=1,

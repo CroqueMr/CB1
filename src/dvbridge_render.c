@@ -197,6 +197,7 @@ struct reference_hook {
     float expert_shape[3];
     float expert_pq_cap;
     struct dvbridge_creative_plan creative_plan;
+    const struct dvbridge_cm4_coefficients *cm4;
     struct pl_color_space creative_source, creative_target;
     struct pl_color_map_params creative_mapper;
     pl_shader_obj *creative_state;
@@ -329,6 +330,13 @@ static struct pl_hook_res reference_output(void *priv, const struct pl_hook_para
                 .src=h->creative_source,.dst=h->creative_target,.state=h->creative_state,
                 .prelinearized=p->color.transfer==PL_COLOR_TRC_LINEAR,.cb1_tone_map=&h->expert_tone,
                 .cb1_tone_shape={h->expert_shape[0],h->expert_shape[1],h->expert_shape[2]}));
+            if(h->cm4){
+                if(h->expert_tone.output_min==0 && h->cm4->sop[1]>0)
+                    h->failed|=!pl_shader_custom(p->sh,&(struct pl_custom_shader){
+                        .input=PL_SHADER_SIG_COLOR,.output=PL_SHADER_SIG_COLOR,
+                        .body="if(dvbridge_signal_black)color.rgb=vec3(0.0);\n"});
+                h->failed|=!dvbridge_creative_cm4_shader(p->sh,h->cm4);
+            }
             h->failed|=!cb1_hdr10_expert_trim(p->sh,&h->creative_plan,h->creative_target.primaries);
             const struct pl_custom_shader domain={.input=PL_SHADER_SIG_COLOR,.output=PL_SHADER_SIG_COLOR,
                 .output_w=abs(p->dst_rect.x1-p->dst_rect.x0),
@@ -370,10 +378,8 @@ static struct pl_hook_res reference_output(void *priv, const struct pl_hook_para
                 "color.rgb=ev*enhanced_policy.x;}}\n"};
         h->failed = h->failed || !pl_shader_custom(p->sh,&enhance);
     }
-    /* The anchored Expert curve fixes zero when B=0, for every signed trim.
-     * A configured nonzero black must not be erased by this guard. */
-    const int keep_black=h->expert ? h->expert_tone.output_min==0 :
-        true;
+    /* Preserve zero at OLED black unless the authored CM4 offset lifts it. */
+    const int keep_black=!h->expert || (h->expert_tone.output_min==0 && (!h->cm4 || h->cm4->sop[1]<=0));
     struct pl_shader_var vars[] = {
         {.var=pl_var_mat3("reference_bt2020"),.data=&h->to_bt2020,.dynamic=true},
         {.var=pl_var_vec4("reference_area"),.data=h->rect,.dynamic=true},
@@ -1155,10 +1161,11 @@ static bool render_picture(struct dvbridge_renderer *r, const struct pl_frame *s
     struct dvbridge_hdr10_metadata signal;
     struct dvbridge_creative_plan creative={0};
     struct cb1_hdr10_expert_plan expert={0};
+    struct dvbridge_cm4_coefficients cm4;
     if (policy) {
         paired = source->enhancement_layer && pts == el_pts;
         if(policy->mode==DVBRIDGE_MODE_HDR10_EXPERT){
-            if(!cb1_hdr10_expert_prepare(&expert,policy,metadata,bytes,paired))return false;
+            if(!cb1_player_led_prepare(&expert,&cm4,policy,metadata,bytes,paired))return false;
             mapped=expert.source;mapped.repr.dovi=&mapped.dovi;
             nominal=expert.target;signal=expert.signal;creative=expert.creative;
         }else{
@@ -1282,6 +1289,7 @@ static bool render_picture(struct dvbridge_renderer *r, const struct pl_frame *s
     }
     if(policy && policy->mode==DVBRIDGE_MODE_HDR10_EXPERT){
         color_map.metadata=PL_HDR_METADATA_HDR10;
+        color_map.gamut_mapping=&pl_gamut_map_relative;
         color_map.gamut_expansion=false;
         color_map.lut_size=expert.tone.lut_size;
         color_map.force_tone_mapping_lut=true;
@@ -1495,6 +1503,7 @@ static bool render_picture(struct dvbridge_renderer *r, const struct pl_frame *s
         memcpy(reference.expert_shape,expert.tone_shape,sizeof(reference.expert_shape));
         reference.expert_pq_cap=cb1_hdr10_expert_ceiling(policy);
         reference.creative_plan=creative;
+        if(creative.backend==DVBRIDGE_CREATIVE_CM4)reference.cm4=&cm4;
         reference.creative_source=mapped.color;reference.creative_target=nominal;
         reference.creative_mapper=color_map;reference.creative_state=&r->creative_state;
         /* The hook owns the only tone/gamut map. The remaining native stage is
@@ -1975,6 +1984,7 @@ static struct pl_hook_res player_led_map(void *priv,const struct pl_hook_params 
     if(preserve_black && !pl_shader_custom(p->sh,&capture))return (struct pl_hook_res){.failed=true};
     struct pl_color_map_params mapper=pl_color_map_default_params;
     mapper.metadata=PL_HDR_METADATA_HDR10;
+    mapper.gamut_mapping=&pl_gamut_map_relative;
     mapper.gamut_expansion=false;
     mapper.force_tone_mapping_lut=true;
     mapper.lut_size=plan->tone.lut_size;

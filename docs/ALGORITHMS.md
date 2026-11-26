@@ -56,13 +56,13 @@ display peak or an output brightness cap.
 | --- | --- | --- | --- |
 | RPU reconstruction data | Reconstruct source pixels | Reconstruct before conversion | Same reconstruction as Reference |
 | L1 min/max/average | Transport | Maximum/average guide scene mapping; minimum validated and retained | Guide expansion; transform authored scene descriptors through the applied curve |
-| L3 offsets | Transport | Retained, not executed | Fold once; emit neutral offsets when the block is present |
+| L3 offsets | Transport | Valid maximum/average offsets guide scene mapping | Fold once; emit neutral offsets when the block is present |
 | L2 CM2.9 trims | Transport | LLDV Reference – HDR10 Output applies compatible primary controls | Guide luminance retention and color protection |
 | L5 active area | Transport and mask borders | Preserve active-area geometry | Output geometry; full-raster signalling while overlays are visible |
 | L6 HDR mastering | Transport | Source reference and static HDR descriptors | Retained if present; not relabelled as measured output |
-| L8 CM4 trims | Transport | Retained; available L2 compatibility only | Guide luminance retention and color protection |
+| L8 CM4 trims | Transport | Applicable pointwise HDR controls; L2 compatibility otherwise | Guide luminance retention and color protection |
 | L9 mastering primaries | Transport | Resolve source mastering gamut | Retained; no output signal-gamut override |
-| L10 target descriptions | Transport | No full L8 creative render | Resolve source anchors; retained if present |
+| L10 target descriptions | Transport | Resolve eligible HDR trim targets | Resolve source anchors; retained if present |
 
 Raw and parsed CM4 fields must agree. Optional-field presence follows the raw
 block length, not whether the value is nonzero. Unknown targets are not assigned
@@ -136,8 +136,8 @@ Disable the TV's additional dynamic tone mapping when using this player-led mapp
 
 ### Tone and creative controls
 
-The runtime uses raw valid L1 maximum/average without adding L3. L1 minimum is
-validated/descriptive, not a display-black anchor. Missing/unusable L1 uses static
+The runtime resolves valid L1 maximum/average with applicable L3 offsets. L1
+minimum is validated/descriptive, not a display-black anchor. Missing/unusable L1 uses static
 descriptors from the same frame. Malformed or contradictory metadata is rejected.
 
 The native ST2094-10 curve compresses when the scene exceeds `T`; otherwise native
@@ -159,10 +159,12 @@ This signed curve fixes both endpoints and their unit tangents. Neutral controls
 bypass it; no linear RGB SOP remains. Chroma uses bounded linear target-gamut RGB
 and that gamut's luminance weights. Zero channels/luminance are guarded.
 
-CM4 uses available L2 compatibility only. L3/L8 are not stacked onto the explicit
-curve; L8-only sources do not claim a full CM4 creative render. Spatial and secondary
-CM4 controls remain unexecuted in this runtime. The independent `cb1-cm4-v1`
-scalar/spatial API is a separate numerical reference, not this runtime contract.
+Both player-led routes use libplacebo’s relative colorimetric gamut mapping to
+preserve separation of bright saturated patches. Compatible HDR L8 pointwise
+controls supersede L2; they are applied once in target-linear RGB. Inapplicable
+SDR-only trims do not apply to HDR targets. Spatial and secondary CM4 controls
+remain unexecuted. The independent `cb1-cm4-v1` scalar/spatial API is a separate
+numerical reference, not a licensed Dolby mapper.
 
 ### Output
 

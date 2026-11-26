@@ -267,14 +267,16 @@ static void compatibility_gpu(pl_gpu gpu,bool colour)
         assert(dvbridge_render_hdr10_policy_rgb(r,&p.policy,&id,&frame,m,bytes,0,0,
             (struct dvbridge_geometry){W,H,0,0,W,H}));
         const struct dvbridge_hdr10_policy_output *pending=dvbridge_render_policy_output(r);
-        assert(pending && pending->creative.backend==DVBRIDGE_CREATIVE_NONE);
-        assert(!pending->creative.l8_coverage.applied && !(pending->creative.applied_levels&(1u<<8)));
-        assert(pending->creative.l8_coverage.preserved==pending->creative.l8_coverage.present);
+        assert(pending && pending->creative.backend==DVBRIDGE_CREATIVE_CM4);
+        assert((pending->creative.applied_levels&(1u<<8)) && pending->creative.l8_coverage.applied==0xdf);
+        assert(pending->creative.l8_coverage.preserved==0x320);
         assert(!(pending->creative.applied_levels&(1u<<2)));
         reference_read(gpu,dvbridge_render_texture(r),0,0,W,H,output);
         if(!control)memcpy(baseline,output,sizeof(baseline));
-        else assert(!memcmp(baseline,output,sizeof(baseline)) &&
-            "Public Expert without L2 must not claim or apply local CM4 controls");
+        else if(control==6 || control==9 || control==10)
+            assert(!memcmp(baseline,output,sizeof(baseline)));
+        else if(colour || (control!=4 && control!=5))
+            assert(memcmp(baseline,output,sizeof(baseline)));
         printf("%s{\"gamut\":%u,\"control\":%u,\"pq\":[",comma?",":"",gamut,control);comma=true;
         for(int i=0;i<W*H;i++)printf("%s[%.17g,%.17g,%.17g]",i?",":"",output[i*4],output[i*4+1],output[i*4+2]);
         puts("]}");
