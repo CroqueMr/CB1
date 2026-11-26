@@ -105,7 +105,7 @@ struct dvbridge_fel {
     bool source_timed;
     bool source_no_rasl;
     int64_t source_taken;
-    bool mel_deferred, el_started;
+    bool mel_deferred, el_started, packed_identity_lost;
     enum unpaired_mel unpaired_mel;
 };
 
@@ -190,14 +190,20 @@ static enum AVPixelFormat hardware_format(AVCodecContext *ctx, const enum AVPixe
     return AV_PIX_FMT_VAAPI;
 }
 
-static void clear_queues(struct dvbridge_fel *f)
+static void clear_packets(struct dvbridge_fel *f)
 {
     for (unsigned i = 0; i < f->num_packets; ++i)
         av_packet_free(&f->packets[i].packet);
+    f->num_packets = 0;
+    f->packet_bytes = 0;
+}
+
+static void clear_queues(struct dvbridge_fel *f)
+{
+    clear_packets(f);
     for (unsigned i = 0; i < f->num_frames; ++i)
         av_frame_free(&f->frames[i]);
-    f->num_packets = f->num_frames = 0;
-    f->packet_bytes = 0;
+    f->num_frames = 0;
     f->failed = f->draining = f->sent_eof = f->eof = f->recovering = f->harvesting = false;
     f->epoch_uncertain = false;
     f->num_times = 0;
@@ -206,7 +212,7 @@ static void clear_queues(struct dvbridge_fel *f)
     f->source_timed = false;
     f->source_no_rasl = false;
     f->source_taken = AV_NOPTS_VALUE;
-    f->mel_deferred = f->el_started = false;
+    f->mel_deferred = f->el_started = f->packed_identity_lost = false;
     f->unpaired_mel = MEL_UNVERIFIED;
 }
 
@@ -412,6 +418,8 @@ static bool pump(struct dvbridge_fel *f)
         return false;
     if (!f->opened)
         return true;
+    if (f->packed_identity_lost)
+        goto lost;
     if (!receive_frames(f))
         goto fail;
     if (!harvest(f))
@@ -429,10 +437,17 @@ static bool pump(struct dvbridge_fel *f)
          * Never decode an ambiguous IDR into a previous BL's exact-time slot. */
         if (!f->source_timed && f->packets[0].access == FEL_KEY && match < f->num_times &&
             !f->times[match].key && f->base_order.context->has_b_frames > 0) {
-            av_log(f->decoder, AV_LOG_ERROR,
-                   "FEL decode: ambiguous enhancement epoch at picture %lld (EL NAL type %d); refusing an unproven pair\n",
+            av_log(f->decoder, AV_LOG_WARNING,
+                   "FEL decode: ambiguous enhancement epoch at picture %lld (EL NAL type %d); residual identity unavailable\n",
                    (long long)f->packets[0].order, vcl_type(packet, f->enhancement_order.context));
-            goto fail;
+            /* Packed POC counters cannot re-establish absolute EL identity.
+             * Drain only the previously admitted pictures until a seek resets it. */
+            f->packed_identity_lost = true;
+            clear_packets(f);
+            av_bsf_flush(f->split);
+            f->harvesting = true;
+            f->sent_eof = f->eof = false;
+            goto lost;
         }
         const int type=f->source_timed ? vcl_type(packet, f->enhancement_order.context) : -1;
         if (f->recovering || (f->source_timed && f->source_no_rasl && (type==8 || type==9))) {
@@ -533,6 +548,12 @@ static bool pump(struct dvbridge_fel *f)
         if (!receive_frames(f))
             goto fail;
     }
+    return true;
+lost:
+    if (!harvest(f))
+        goto fail;
+    if (!f->harvesting && f->draining)
+        f->eof = true;
     return true;
 fail:
     f->failed = true;
@@ -652,6 +673,8 @@ bool dvbridge_fel_submit(struct dvbridge_fel *f, const AVPacket *packet)
     if (!picture_identity(&f->base_order, packet, &base_identity) ||
         !remember_base(f, base_identity, packet->pts, true))
         goto fail;
+    if (f->packed_identity_lost)
+        return true;
     AVPacket *copy = av_packet_clone(packet);
     if (!copy)
         goto fail;
@@ -686,6 +709,10 @@ bool dvbridge_fel_submit(struct dvbridge_fel *f, const AVPacket *packet)
             !pump(f)) {
             av_packet_free(&copy);
             goto fail;
+        }
+        if (f->packed_identity_lost) {
+            av_packet_free(&copy);
+            return true;
         }
         const int64_t previous_maximum = f->enhancement_order.maximum;
         if (f->num_packets >= QUEUE_MAX || copy->size <= 0 ||
@@ -862,15 +889,47 @@ static int take_source(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, boo
     return result;
 }
 
-int dvbridge_fel_take(struct dvbridge_fel *f, int64_t pts, AVFrame **frame)
+static int take_lost(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, bool no_residual)
 {
-    if (!f || !frame || *frame || pts == AV_NOPTS_VALUE)
+    bool ok = pump(f);
+    if (take_ready(f, pts, frame))
+        return 1;
+    if (!ok)
         return -1;
-    if (f->source_timed) return take_source(f, pts, frame, false);
+    if (f->anchor_pts != AV_NOPTS_VALUE && pts < f->anchor_pts)
+        return 2;
+    unsigned match = 0;
+    while (match < f->num_times && f->times[match].pts != pts)
+        ++match;
+    if (match != f->num_times && f->harvesting && (f->output_order == AV_NOPTS_VALUE ||
+        f->times[match].order >= f->output_order))
+        return 0;
+    if (!no_residual || match == f->num_times || !f->times[match].presentable) {
+        f->failed = true;
+        return -1;
+    }
+    /* Retire only BL identities that cannot still produce an exact EL. */
+    for (unsigned i = 0; i < f->num_times;) {
+        if (f->times[i].pts > pts || (f->harvesting && f->times[i].order >= f->output_order)) {
+            ++i;
+            continue;
+        }
+        --f->num_times;
+        memmove(f->times + i, f->times + i + 1, (f->num_times - i) * sizeof(*f->times));
+    }
+    return 3;
+}
+
+static int take_packed(struct dvbridge_fel *f, int64_t pts, AVFrame **frame, bool no_residual)
+{
     /* Return available work before submitting future enhancement pictures. */
     if (take_ready(f, pts, frame))
         return 1;
-    if (f->failed || (f->eof && f->recovering))
+    if (f->failed)
+        return -1;
+    if (f->packed_identity_lost)
+        return take_lost(f, pts, frame, no_residual);
+    if (f->eof && f->recovering)
         return -1;
     if (f->synchronizing && !f->enhancement_order.seen)
         f->unpaired_mel = MEL_REQUIRES_EL;
@@ -879,7 +938,11 @@ int dvbridge_fel_take(struct dvbridge_fel *f, int64_t pts, AVFrame **frame)
     bool ok = pump(f);
     if (take_ready(f, pts, frame))
         return 1;
-    if (!ok || (f->eof && f->recovering))
+    if (!ok)
+        return -1;
+    if (f->packed_identity_lost)
+        return take_lost(f, pts, frame, no_residual);
+    if (f->eof && f->recovering)
         return -1;
     if ((f->recovering && !f->harvesting) ||
         (f->anchor_pts != AV_NOPTS_VALUE && pts < f->anchor_pts)) {
@@ -912,6 +975,13 @@ int dvbridge_fel_take(struct dvbridge_fel *f, int64_t pts, AVFrame **frame)
     return f->eof || f->num_frames == QUEUE_MAX ? -1 : 0;
 }
 
+int dvbridge_fel_take(struct dvbridge_fel *f, int64_t pts, AVFrame **frame)
+{
+    if (!f || !frame || *frame || pts == AV_NOPTS_VALUE)
+        return -1;
+    return f->source_timed ? take_source(f, pts, frame, false) : take_packed(f, pts, frame, false);
+}
+
 int dvbridge_fel_take_mel(struct dvbridge_fel *f, int64_t pts, AVFrame **frame,
                          const void *data, size_t size)
 {
@@ -930,7 +1000,7 @@ int dvbridge_fel_take_mel(struct dvbridge_fel *f, int64_t pts, AVFrame **frame,
         f->unpaired_mel = MEL_VERIFIED;
         return 3;
     }
-    return dvbridge_fel_take(f, pts, frame);
+    return take_packed(f, pts, frame, no_residual);
 }
 
 bool dvbridge_fel_failed(const struct dvbridge_fel *f)
