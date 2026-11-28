@@ -2608,6 +2608,19 @@ enum cb1_ai_status dvbridge_prepare_sdr_expansion(struct dvbridge_renderer *r,
                                      source, pts, dv, pq, description);
 }
 
+static void expanded_hdr10_output(struct dvbridge_renderer *r,
+    const struct dvbridge_policy *policy, const struct dvbridge_identity *id,
+    struct dvbridge_geometry geometry, struct pl_color_space color)
+{
+    r->reconstructed_color=color;
+    r->policy_pending=(struct dvbridge_hdr10_policy_output){
+        .identity=*id, .policy=*policy, .geometry=geometry, .nominal_target=color,
+        .container=color, .hdr10={.max_luminance=(uint16_t)color.hdr.max_luma},
+    };
+    r->packed=false;
+    r->ready=r->policy_ready=true;
+}
+
 bool dvbridge_render_expanded_hdr10(struct dvbridge_renderer *r,
     const struct dvbridge_policy *policy, const struct dvbridge_identity *id,
     struct dvbridge_geometry geometry)
@@ -2621,11 +2634,31 @@ bool dvbridge_render_expanded_hdr10(struct dvbridge_renderer *r,
         geometry.source_width != image->crop.x1 || geometry.source_height != image->crop.y1 ||
         !configure_target(r, geometry) || !ensure_rgb(r) ||
         !ai_render_pixels(r, image, geometry, NULL, false, NULL, NULL)) return false;
-    r->policy_pending = (struct dvbridge_hdr10_policy_output){
-        .identity=*id, .policy=*policy, .geometry=geometry, .nominal_target=image->color,
-        .container=image->color, .hdr10={.max_luminance=(uint16_t)image->color.hdr.max_luma},
-    };
-    r->policy_ready = true;
+    expanded_hdr10_output(r,policy,id,geometry,image->color);
+    return true;
+}
+
+bool dvbridge_render_sdr_hdr10(struct dvbridge_renderer *r, const struct dvbridge_policy *policy,
+    const struct dvbridge_identity *id, const struct pl_frame *source, double pts,
+    struct dvbridge_geometry geometry)
+{
+    if (!r) return false;
+    dvbridge_render_policy_cancel(r);
+    if (!id || !id->stream || !id->picture || !id->revision || !isfinite(pts) ||
+        !policy || policy->mode!=DVBRIDGE_MODE_HDR10_BASIC || policy->revision!=id->revision ||
+        dvbridge_policy_validate(policy)!=DVBRIDGE_POLICY_VALID || r->dv.active ||
+        !source || source->crop.x1!=geometry.source_width || source->crop.y1!=geometry.source_height ||
+        !configure_target(r,geometry)) return false;
+
+    struct pl_frame pq;
+    if (!r->target_identity || geometry.x || geometry.y ||
+        geometry.width!=r->target_width || geometry.height!=r->target_height)
+        return dvbridge_prepare_sdr_expansion(r,id,source,pts,false,&pq,NULL)==CB1_AI_READY &&
+               dvbridge_render_expanded_hdr10(r,policy,id,geometry);
+
+    if (!ensure_rgb(r) || !p5_preserve_backing(r) ||
+        !cb1_sdr_expansion_hdr10_into(r->renderer,source,r->rgb,&pq)) return false;
+    expanded_hdr10_output(r,policy,id,geometry,pq.color);
     return true;
 }
 

@@ -5,6 +5,8 @@
 #include "dvbridge_policy.h"
 
 struct cb1_sdr_expansion;
+bool cb1_sdr_expansion_hdr10_into(pl_renderer renderer, const struct pl_frame *source,
+    pl_tex target, struct pl_frame *frame);
 bool cb1_sdr_expansion_supported(pl_gpu gpu, bool dv);
 void cb1_sdr_expansion_destroy(struct cb1_sdr_expansion **ctx);
 enum cb1_ai_status cb1_sdr_expansion_prepare(struct cb1_sdr_expansion **ctx,

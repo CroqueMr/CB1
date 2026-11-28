@@ -3,6 +3,68 @@
 #include "cb1_hdr10_ai.h"
 #include "dvbridge_gl_frame.h"
 #include <GLES2/gl2ext.h>
+#include <libplacebo/dispatch.h>
+#include <libplacebo/shaders/custom.h>
+
+static unsigned image_passes;
+extern bool __real_pl_render_image(pl_renderer, const struct pl_frame *, const struct pl_frame *,
+    const struct pl_render_params *);
+bool __wrap_pl_render_image(pl_renderer r, const struct pl_frame *src, const struct pl_frame *dst,
+                             const struct pl_render_params *params)
+{
+    ++image_passes;
+    return __real_pl_render_image(r,src,dst,params);
+}
+
+static void compare_hdr10_paths(pl_gpu gpu, struct dvbridge_renderer *renderer,
+    const struct pl_frame *source)
+{
+    const int w=(int)source->crop.x1,h=(int)source->crop.y1;
+    struct dvbridge_identity id={32,0,3};
+    const struct dvbridge_policy policy={.revision=id.revision,.mode=DVBRIDGE_MODE_HDR10_BASIC};
+    pl_dispatch dispatch=pl_dispatch_create(NULL,gpu);
+    pl_tex screen=reference_texture(gpu,w,h,NULL);
+    float *expected=calloc(w*h*4,sizeof(float)), *actual=calloc(w*h*4,sizeof(float));
+    assert(dispatch && expected && actual);
+    const unsigned depths[]={10,12,16};
+    for (unsigned crop=0;crop<3;++crop) for (unsigned combination=0;combination<6;++combination) {
+        const unsigned bits=depths[combination/2];
+        const bool limited=combination%2;
+        struct dvbridge_geometry g={w,h,0,0,w,h,w,h};
+        if (crop==2) { g.y=1; g.height=h-2; }
+        if (crop==1) { g.crop[0]=1; g.crop[2]=w-1; g.crop[3]=h; }
+        for (unsigned fast=0;fast<2;++fast) {
+            ++id.picture;
+            unsigned start=image_passes;
+            if (fast)
+                assert(dvbridge_render_sdr_hdr10(renderer,&policy,&id,source,-.5,g));
+            else {
+                struct pl_frame pq;
+                assert(dvbridge_prepare_sdr_expansion(renderer,&id,source,-.5,false,&pq,NULL)==CB1_AI_READY);
+                assert(dvbridge_render_expanded_hdr10(renderer,&policy,&id,g));
+            }
+            assert(image_passes-start==(fast && !crop ? 1u : 2u));
+            pl_tex film=dvbridge_render_texture(renderer);
+            assert(film && film->params.format->type==PL_FMT_FLOAT);
+            pl_shader sh=pl_dispatch_begin(dispatch);
+            assert(pl_shader_custom(sh,&(struct pl_custom_shader){
+                .output=PL_SHADER_SIG_COLOR,.body="color=vec4(.17,.08,.12,.41);"}));
+            assert(pl_dispatch_finish(dispatch,pl_dispatch_params(.shader=&sh,.target=film,
+                .rect={0,0,w/2,h},.blend_params=&pl_alpha_overlay)));
+            assert(dvbridge_render_hdr10_policy_resolve(renderer,screen,true,limited,bits));
+            reference_read(gpu,screen,0,0,w,h,fast ? actual : expected);
+            assert(dvbridge_render_policy_commit(renderer,&id,screen));
+            if (fast) assert(!memcmp(actual,expected,w*h*4*sizeof(float)));
+        }
+    }
+    struct dvbridge_geometry g={w,h,0,0,w,h,w,h};
+    assert(!dvbridge_render_sdr_hdr10(renderer,&policy,&id,source,NAN,g));
+    assert(!dvbridge_render_policy_output(renderer));
+    free(actual);free(expected);
+    pl_tex_destroy(gpu,&screen);
+    pl_dispatch_destroy(&dispatch);
+}
+
 
 static float encode_pq(double nits)
 {
@@ -88,6 +150,8 @@ static void test_decoded_planes(pl_gpu gpu, struct dvbridge_renderer *renderer)
                 }
                 if (n==3) assert(rgb[0]>rgb[1] && rgb[0]>rgb[2]);
             }
+            if (gamut==1 && !layout && !full)
+                compare_hdr10_paths(gpu,renderer,&imported.frame);
             dvbridge_gl_frame_release(&imported);
             glDeleteTextures(count,textures);
         }
@@ -238,6 +302,8 @@ int main(void)
     source.color.transfer=PL_COLOR_TRC_PQ;
     assert(dvbridge_prepare_sdr_expansion(renderer,&id,&source,1,true,&output,
                                          &(struct cb1_ai_result){0}) == CB1_AI_INCOMPATIBLE);
+    source.color.transfer=PL_COLOR_TRC_GAMMA24;
+    compare_hdr10_paths(gpu.gl->gpu,renderer,&source);
     test_decoded_planes(gpu.gl->gpu,renderer);
     pl_tex_destroy(gpu.gl->gpu,&input);
     dvbridge_renderer_destroy(renderer);

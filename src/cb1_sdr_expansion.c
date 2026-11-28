@@ -68,7 +68,7 @@ static bool valid_source(const struct pl_frame *f)
 struct expansion_curve {
     struct pl_color_space source, target;
     float matrix[9];
-    bool applied;
+    bool applied, quantize16;
 };
 
 static struct pl_hook_res apply_curve(void *priv, const struct pl_hook_params *p)
@@ -100,6 +100,11 @@ static struct pl_hook_res apply_curve(void *priv, const struct pl_hook_params *p
         .input=PL_SHADER_SIG_COLOR, .output=PL_SHADER_SIG_COLOR,
         .body="color.rgb=mix(vec3(0.0),color.rgb,greaterThan(color.rgb,vec3(0.000001)));",
     });
+    if (ok && curve->quantize16)
+        ok = pl_shader_custom(p->sh, &(struct pl_custom_shader){
+            .input=PL_SHADER_SIG_COLOR, .output=PL_SHADER_SIG_COLOR,
+            .body="color=roundEven(clamp(color,0.0,1.0)*65535.0)/65535.0;",
+        });
     curve->applied = ok;
     return (struct pl_hook_res){.failed=!ok, .output=PL_HOOK_SIG_NONE};
 }
@@ -123,14 +128,13 @@ bool cb1_sdr_expansion_supported(pl_gpu gpu, bool dv)
         reduction_format(gpu)));
 }
 
-static bool convert(struct cb1_sdr_expansion *s, pl_renderer renderer,
-                    const struct pl_frame *source, bool dv)
+static bool convert(pl_renderer renderer, const struct pl_frame *source, bool dv,
+                    pl_tex dst, struct pl_frame *frame)
 {
-    pl_fmt fmt = image_format(s->gpu);
-    int w = (int)source->crop.x1, h = (int)source->crop.y1;
-    if (!fmt || !pl_tex_recreate(s->gpu, &s->image, pl_tex_params(
-        .w=w, .h=h, .format=fmt, .renderable=true, .sampleable=true))) return false;
+    const int w=dst->params.w, h=dst->params.h;
     struct expansion_curve curve = {
+        /* Match the normalized 16-bit intermediate when drawing into the GUI backing. */
+        .quantize16=dst->params.format->type==PL_FMT_FLOAT,
         .source={.primaries=source->color.primaries, .transfer=source->color.transfer,
                  .hdr={.max_luma=PL_COLOR_SDR_WHITE, .min_luma=PL_COLOR_HDR_BLACK}},
         .target={.primaries=PL_COLOR_PRIM_BT_2020, .transfer=PL_COLOR_TRC_PQ,
@@ -153,13 +157,23 @@ static bool convert(struct cb1_sdr_expansion *s, pl_renderer renderer,
     params.skip_caching_single_frame=true;
     struct pl_frame input = *source;
     input.color = curve.source;
-    s->frame = (struct pl_frame){.num_planes=1, .repr=pl_color_repr_rgb, .color=curve.target,
-        .crop={0,0,w,h}, .planes={{.texture=s->image, .components=4, .component_mapping={0,1,2,3}}}};
+    *frame = (struct pl_frame){.num_planes=1, .repr=pl_color_repr_rgb, .color=curve.target,
+        .crop={0,0,w,h}, .planes={{.texture=dst, .components=4, .component_mapping={0,1,2,3}}}};
     /* Decode and reconstruct chroma in the original signal space. The final
      * hook owns the only transfer and gamut conversion into the PQ texture. */
-    struct pl_frame target = s->frame;
+    struct pl_frame target = *frame;
     target.color = input.color;
     return pl_render_image(renderer, &input, &target, &params) && curve.applied;
+}
+
+bool cb1_sdr_expansion_hdr10_into(pl_renderer renderer, const struct pl_frame *source,
+    pl_tex target, struct pl_frame *frame)
+{
+    if (!valid_source(source) || target->params.w!=source->crop.x1 ||
+        target->params.h!=source->crop.y1) return false;
+    for (int i=0; i<source->num_planes; ++i)
+        if (source->planes[i].texture==target) return false;
+    return convert(renderer,source,false,target,frame);
 }
 
 /* Min, max and arithmetic mean of maximum PQ channel, over every video pixel.
@@ -223,10 +237,15 @@ enum cb1_ai_status cb1_sdr_expansion_prepare(struct cb1_sdr_expansion **ptr,
             if (!s) return CB1_AI_INCOMPATIBLE;
             s->gpu=gpu;
         }
-        if (s->pending && pl_buf_poll(gpu,s->readback,0)) return CB1_AI_PENDING;
+        /* Only a new DV reduction overwrites the asynchronous transfer buffer. */
+        if (dv && s->readback && pl_buf_poll(gpu,s->readback,0)) return CB1_AI_PENDING;
         s->id=(struct dvbridge_identity){0};
         s->pending=false;
-        if (!convert(s,renderer,source,dv) || (dv && !measure(s))) return CB1_AI_INCOMPATIBLE;
+        pl_fmt fmt=image_format(gpu);
+        if (!fmt || !pl_tex_recreate(gpu,&s->image,pl_tex_params(
+                .w=source->crop.x1,.h=source->crop.y1,.format=fmt,.renderable=true,.sampleable=true)) ||
+            !convert(renderer,source,dv,s->image,&s->frame) || (dv && !measure(s)))
+            return CB1_AI_INCOMPATIBLE;
         s->id=*id;
         s->pts=pts;
         s->dv=dv;

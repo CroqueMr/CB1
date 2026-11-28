@@ -11,7 +11,7 @@
 struct dvbridge_renderer;
 struct dvbridge_native_overlay;
 
-#define CB1_SDR_EXPANSION_API 1
+#define CB1_SDR_EXPANSION_API 2
 bool dvbridge_renderer_supports_sdr_expansion(struct dvbridge_renderer *renderer, bool dolby_vision);
 /* Prepare SDR once at source size, in display-referred PQ BT.2020. On PENDING,
  * retry the same identity/PTS with its source. NULL polls an already queued
@@ -22,6 +22,10 @@ bool dvbridge_renderer_supports_sdr_expansion(struct dvbridge_renderer *renderer
 enum cb1_ai_status dvbridge_prepare_sdr_expansion(struct dvbridge_renderer *renderer,
     const struct dvbridge_identity *id, const struct pl_frame *source, double pts,
     bool dolby_vision, struct pl_frame *pq, struct cb1_ai_result *description);
+/* Compose-ready HDR10. Full-raster identity writes straight into the PQ GUI backing. */
+bool dvbridge_render_sdr_hdr10(struct dvbridge_renderer *renderer, const struct dvbridge_policy *policy,
+    const struct dvbridge_identity *id, const struct pl_frame *source, double pts,
+    struct dvbridge_geometry geometry);
 /* Fit the matching prepared HDR10 picture for existing resolve/commit calls. */
 bool dvbridge_render_expanded_hdr10(struct dvbridge_renderer *renderer,
     const struct dvbridge_policy *policy, const struct dvbridge_identity *id,
