@@ -1,6 +1,6 @@
 # Engine and circuits
 
-**CB1 1.1** is the engine version for R1.1.0. The table lists the identifiers reported by Player Information.
+**CB1 1.2** is the engine version for R1.2.0. The table lists the identifiers reported by Player Information.
 
 | Circuit | Version |
 | --- | --- |
@@ -8,12 +8,12 @@
 | Dolby Vision Master Reference | `CB1-DVDVMR.1.0` |
 | Dolby Vision Master Reference, IPT-PQc2 output | `CB1-DVDVMRI.1.0` |
 | Dolby Vision to HDR10 Rendering | `CB1-DVHDR10B.1.0` |
-| LLDV Reference – HDR10 Output | `CB1-DVHDR10X.1.0` |
-| LLDV Reference – Native | `CB1-DVLLDV.1.0` |
+| LLDV Reference – HDR10 Output | `CB1-DVHDR10X.1.1` |
+| LLDV Reference – Native | `CB1-DVLLDV.1.1` |
 | Dolby Vision to HDR10+ | `CB1-DVHDR10P.1.0` |
 | Dolby Vision to Dolby Vision Adaptive HDR Mapping | `CB1-DVDVA.1.0` |
 | HDR10 to Dolby Vision Rendering, AI-assisted | `CB1-HDR10DVR.1.0` |
-| HDR10 to Dolby Vision Adaptive HDR Mapping, AI-assisted | `CB1-HDR10DVA.1.0` |
+| HDR10 to Dolby Vision Adaptive HDR Mapping, AI-assisted | `CB1-HDR10DVA.1.1` |
 | HDR10+ to Dolby Vision Rendering, metadata-guided | `CB1-HDR10PDVR.1.0` |
 | Dolby Vision to SDR Rendering | `CB1-DVSDR.1.0` |
 | HDR10/HDR10+ to SDR Rendering | `CB1-HDR10SDR.1.0` |
