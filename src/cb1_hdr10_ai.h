@@ -8,7 +8,8 @@ extern "C" {
 #endif
 struct cb1_hdr10_ai;
 enum cb1_source_description_flags {
-    CB1_SOURCE_HDR10PLUS=1, CB1_SOURCE_SCENE_REFRESH=2, CB1_SOURCE_STATISTICS=4
+    CB1_SOURCE_HDR10PLUS=1, CB1_SOURCE_SCENE_REFRESH=2, CB1_SOURCE_STATISTICS=4,
+    CB1_SOURCE_SDR_EXPANDED=8
 };
 /* Zero preserves the AI authoring contract. HDR10+ describes its original source. */
 struct cb1_ai_result {

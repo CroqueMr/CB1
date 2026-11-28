@@ -19,6 +19,21 @@
 | HDR10/HDR10+ to SDR Rendering | `CB1-HDR10SDR.1.0` |
 | Plain HLG to SDR | `CB1-HLGSDR.1.0` |
 | Plain HLG to Dolby Vision Rendering | `CB1-HLGDVR.1.0` |
+| SDR to HDR10 Rendering | `CB1-SDRHDR10.1.0` |
+| SDR to Dolby Vision Rendering | `CB1-SDRDVR.1.0` |
+
+Both SDR conversions decode the source matrix, range and transfer before mapping
+linear color to BT.2020. Their shared fixed curve maps a neutral 90% BT.1886
+signal to 203 cd/m². The highlight roll-up reaches 1000 cd/m² for HDR10 or
+600 cd/m² for TV-led Dolby Vision at 109% input. Saturated colors retain their
+linear RGB ratios when a channel reaches the ceiling. HDR10 reports the target
+peak and leaves content-light measurements unspecified.
+
+TV-led L1 carries minimum, maximum and arithmetic mean of the largest PQ-encoded
+RGB component across every pixel of the converted source raster, including
+encoded bars. The reduction precedes scaling and GUI composition. L3 uses
+neutral offsets. The transport identifies the converted frame by stream, picture,
+revision and timestamp. These circuits generate no creative trims.
 
 Identifiers are defined in `src/cb1_circuit.c`. A circuit revision changes when
 its processing contract or rendered result changes. Player UI and driver-only
