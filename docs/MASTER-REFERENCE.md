@@ -1,6 +1,6 @@
 # Dolby Vision Master Reference
 
-Circuit version **1.0** · Engine **CB1 1.1**
+Circuit version **1.0** · Engine **CB1 1.2**
 
 **Purpose.** Preserve the highest reconstruction precision when sending Dolby Vision to a TV-led display. Use exact integer reconstruction and dedicated FEL filters on supported sources.
 
