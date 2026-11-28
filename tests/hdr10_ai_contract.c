@@ -12,12 +12,12 @@
 int main(void)
 {
     const char *expected[] = {
-        "CB1-DVDVR.0.6", "CB1-DVHDR10B.0.4", "CB1-DVHDR10X.0.12",
-        "CB1-DVDVA.0.9", NULL,
-        NULL, NULL,
-        "CB1-HDR10DVR.0.1.3", "CB1-HDR10DVA.0.8", "CB1-DVDVMR.0.6", "CB1-DVDVA.0.11", "CB1-DVDVMRI.0.2",
-        "CB1-DVHDR10P.0.1", "CB1-HDR10PDVR.0.2",
-        "CB1-DVSDR.0.1", "CB1-HDR10SDR.0.1", "CB1-HLGDVR.0.1", "CB1-DVLLDV.0.1",
+        "CB1-DVDVR.1.0", "CB1-DVHDR10B.1.0", "CB1-DVHDR10X.1.0",
+        "CB1-DVDVA.1.0", NULL, NULL, NULL,
+        "CB1-HDR10DVR.1.0", "CB1-HDR10DVA.1.0", "CB1-DVDVMR.1.0", "CB1-DVDVAB.1.0",
+        "CB1-DVDVMRI.1.0", "CB1-DVHDR10P.1.0", "CB1-HDR10PDVR.1.0",
+        "CB1-DVSDR.1.0", "CB1-HDR10SDR.1.0", "CB1-HLGDVR.1.0", "CB1-DVLLDV.1.0",
+        "CB1-HLGSDR.1.0", "CB1-SDRHDR10.1.0", "CB1-SDRDVR.1.0",
     };
     assert(strcmp(cb1_engine_version(), "CB1 1.1") == 0);
     assert(CB1_CIRCUIT_COUNT == (int)(sizeof(expected)/sizeof(*expected)));

@@ -7,10 +7,26 @@
 #include "dvbridge_creative.h"
 #include "cb1_master_reference.h"
 #include "cb1_cmv40.h"
+#include "cb1_hdr10_ai.h"
 struct dvbridge_renderer;
 struct dvbridge_native_overlay;
 
-struct cb1_ai_result;
+#define CB1_SDR_EXPANSION_API 1
+bool dvbridge_renderer_supports_sdr_expansion(struct dvbridge_renderer *renderer, bool dolby_vision);
+/* Prepare SDR once at source size, in display-referred PQ BT.2020. On PENDING,
+ * retry the same identity/PTS with its source. NULL polls an already queued
+ * identity. Outputs are written on READY.
+ * The PQ texture is borrowed until another identity is prepared on this GPU
+ * context. Submit consumers before then and retain imported planes until the
+ * conversion's GPU use has retired. TV-led uses the existing Standard packer. */
+enum cb1_ai_status dvbridge_prepare_sdr_expansion(struct dvbridge_renderer *renderer,
+    const struct dvbridge_identity *id, const struct pl_frame *source, double pts,
+    bool dolby_vision, struct pl_frame *pq, struct cb1_ai_result *description);
+/* Fit the matching prepared HDR10 picture for existing resolve/commit calls. */
+bool dvbridge_render_expanded_hdr10(struct dvbridge_renderer *renderer,
+    const struct dvbridge_policy *policy, const struct dvbridge_identity *id,
+    struct dvbridge_geometry geometry);
+
 #define DVBRIDGE_L2_TRIMS_API 1
 /* Next-picture Standard/Master metadata and offline player-led mapping.
  * Reconstruction still consumes the original metadata. Adaptive/AI clears it. */

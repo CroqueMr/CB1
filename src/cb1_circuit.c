@@ -24,6 +24,8 @@ const char *cb1_circuit_version(enum cb1_circuit circuit)
         [CB1_DV_SDR] = "CB1-DVSDR.1.0",
         [CB1_HDR10_SDR] = "CB1-HDR10SDR.1.0",
         [CB1_HLG_SDR] = "CB1-HLGSDR.1.0",
+        [CB1_SDR_HDR10] = "CB1-SDRHDR10.1.0",
+        [CB1_SDR_DV] = "CB1-SDRDVR.1.0",
         [CB1_HLG_DV_REFERENCE] = "CB1-HLGDVR.1.0",
         [CB1_DV_DV_LLDV] = "CB1-DVLLDV.1.0",
     };

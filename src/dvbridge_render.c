@@ -4,6 +4,7 @@
 /* Reconstruct video at full precision, then pack the HDMI transport with frame-matched metadata. */
 #include "dvbridge_render.h"
 #include "cb1_hdr10plus_analysis.h"
+#include "cb1_sdr_expansion.h"
 #include <dlfcn.h>
 #include "dvbridge_placebo.h"
 #include "cb1_hdr10_expert.h"
@@ -114,6 +115,7 @@ struct player_led_compute {
 
 struct dvbridge_renderer {
     pl_gpu gpu;
+    struct cb1_sdr_expansion *sdr_expansion;
     pl_renderer renderer;
     pl_dispatch player_led_dispatch;
     struct player_led_compute player_led_compute;
@@ -950,6 +952,7 @@ static void dve_release_images(struct dvbridge_renderer *r)
 
 static void renderer_free(struct dvbridge_renderer *r)
 {
+    cb1_sdr_expansion_destroy(&r->sdr_expansion);
     if(r->analysis_storage.mapped)
         dv_delete_storage(r->analysis_storage.buffers,r->analysis_storage.sampler,r->analysis_storage.mapped);
     cb1_processing_reset(&r->processing,r->gpu);
@@ -2596,6 +2599,36 @@ bool dvbridge_render_hdr10_policy_rgb(struct dvbridge_renderer *r,
     return true;
 }
 
+enum cb1_ai_status dvbridge_prepare_sdr_expansion(struct dvbridge_renderer *r,
+    const struct dvbridge_identity *id, const struct pl_frame *source, double pts,
+    bool dv, struct pl_frame *pq, struct cb1_ai_result *description)
+{
+    if (!r) return CB1_AI_INVALID;
+    return cb1_sdr_expansion_prepare(&r->sdr_expansion, r->gpu, r->renderer, id,
+                                     source, pts, dv, pq, description);
+}
+
+bool dvbridge_render_expanded_hdr10(struct dvbridge_renderer *r,
+    const struct dvbridge_policy *policy, const struct dvbridge_identity *id,
+    struct dvbridge_geometry geometry)
+{
+    if (!r) return false;
+    dvbridge_render_policy_cancel(r);
+    const struct pl_frame *image = cb1_sdr_expansion_hdr10(r->sdr_expansion, id);
+    if (!image || !policy || policy->mode != DVBRIDGE_MODE_HDR10_BASIC ||
+        policy->revision != id->revision || r->dv.active ||
+        dvbridge_policy_validate(policy) != DVBRIDGE_POLICY_VALID ||
+        geometry.source_width != image->crop.x1 || geometry.source_height != image->crop.y1 ||
+        !configure_target(r, geometry) || !ensure_rgb(r) ||
+        !ai_render_pixels(r, image, geometry, NULL, false, NULL, NULL)) return false;
+    r->policy_pending = (struct dvbridge_hdr10_policy_output){
+        .identity=*id, .policy=*policy, .geometry=geometry, .nominal_target=image->color,
+        .container=image->color, .hdr10={.max_luminance=(uint16_t)image->color.hdr.max_luma},
+    };
+    r->policy_ready = true;
+    return true;
+}
+
 static bool direct_target_valid_min(const struct dvbridge_renderer *r,pl_tex target,unsigned bits,unsigned minimum)
 {
     if(!r || !target || bits<minimum || bits>16 || target==r->rgb ||
@@ -3169,6 +3202,12 @@ static bool hdr10_ai_gpu_requirements(pl_gpu gpu)
         eglGetProcAddress("glMemoryBarrier");
 }
 #endif
+
+bool dvbridge_renderer_supports_sdr_expansion(struct dvbridge_renderer *r, bool dv)
+{
+    return dvbridge_renderer_supports_mode(r, dv ? DVBRIDGE_MODE_STANDARD : DVBRIDGE_MODE_HDR10_BASIC) &&
+        cb1_sdr_expansion_supported(r->gpu, dv) && (!dv || (r->owner && dv_transport_requirements(r->gpu)));
+}
 
 bool dvbridge_renderer_supports_hdr10_ai(struct dvbridge_renderer *r,enum dvbridge_mode mode)
 {
@@ -4356,7 +4395,8 @@ static AVDOVIMetadata *ai_output_metadata(const struct cb1_ai_result *prediction
     const struct pl_color_space *color,const unsigned margins[4],size_t *bytes)
 {
     const struct cb1_l1l3 *raw=&prediction->raw;
-    if(raw->l1_min>raw->l1_avg || raw->l1_avg>raw->l1_max || !raw->l1_max ||
+    if(raw->l1_min>raw->l1_avg || raw->l1_avg>raw->l1_max ||
+       (!raw->l1_max && !(prediction->source_flags & CB1_SOURCE_SDR_EXPANDED)) ||
        raw->l1_max>4095 || raw->l3_min>4095 || raw->l3_max>4095 || raw->l3_avg>4095)return NULL;
     AVDOVIMetadata *m=av_dovi_metadata_alloc(bytes);if(!m)return NULL;
     av_dovi_get_header(m)->disable_residual_flag=1;
@@ -4724,6 +4764,9 @@ static pl_tex render_hdr10_ai(struct dvbridge_renderer *r,const struct dvbridge_
     pl_tex packed,bool flip,const struct dvbridge_native_overlay *overlay)
 {
     struct pl_frame hlg;
+    const bool expanded = prediction && (prediction->source_flags & CB1_SOURCE_SDR_EXPANDED);
+    if (expanded && (!r || !policy || policy->mode != DVBRIDGE_MODE_STANDARD ||
+        !cb1_sdr_expansion_matches_dv(r->sdr_expansion, prediction, source))) return NULL;
     const bool original_hlg=source && source->color.transfer==PL_COLOR_TRC_HLG;
     if(original_hlg){
         if(!policy || policy->mode!=DVBRIDGE_MODE_STANDARD || source->repr.dovi ||
@@ -4738,7 +4781,7 @@ static pl_tex render_hdr10_ai(struct dvbridge_renderer *r,const struct dvbridge_
     if((!packed || !policy || (policy->mode!=DVBRIDGE_MODE_STANDARD && !identity)) && !ensure_rgb(r))return NULL;
     dvbridge_render_policy_cancel(r);dvbridge_candidate_destroy(r->pending);r->pending=NULL;r->packed=false;
     if(!policy || !prediction || !source || !geometry || prediction->id.revision!=policy->revision ||
-       !isfinite(prediction->pts) || prediction->pts<0 || dvbridge_policy_validate(policy)!=DVBRIDGE_POLICY_VALID ||
+       !isfinite(prediction->pts) || (!expanded && prediction->pts<0) || dvbridge_policy_validate(policy)!=DVBRIDGE_POLICY_VALID ||
        (policy->mode!=DVBRIDGE_MODE_STANDARD && policy->mode!=DVBRIDGE_MODE_ENHANCED_DV) ||
        source->rotation || source->num_overlays ||
        source->profile.len || source->icc || source->lut || source->enhancement_layer || source->repr.dovi ||
